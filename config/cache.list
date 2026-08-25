@@ -1,0 +1,3 @@
+# Statements the transparent cache is allowed to serve from Valkey.
+# Exact byte match against the statement text on the wire.
+SELECT sku, name, price FROM products WHERE category = 'tools' AND SLEEP(1.5) = 0

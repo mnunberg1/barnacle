@@ -1,54 +1,47 @@
-# Build the BPF object and the userspace loader.
+# Transparent MySQL query cache.
 #
-# Intended to run *inside* the bpf container (docker compose exec bpf make),
-# because vmlinux.h is generated from the BTF of the kernel we will attach to.
+# Intended to run inside the bpf container:
+#
+#   docker compose exec bpf make
+#   docker compose exec bpf make check
+#   docker compose exec bpf demo/cache_demo.sh
+#
+# The cache itself is plain userspace C++ and needs no kernel support, no
+# root and no BPF toolchain -- it hooks the client's TLS library from inside
+# the client process. That is a deliberate consequence of intercepting above
+# TLS rather than on the wire.
 
-CLANG   ?= clang
-BPFTOOL ?= bpftool
-CC      ?= gcc
-CXX     ?= g++
+CXX      ?= g++
+CXXFLAGS ?= -g -O2 -Wall -Wextra -std=c++17 -fPIC
 
-OUT      := build
-UNAME_M  := $(shell uname -m)
-ARCH     := $(shell echo $(UNAME_M) | sed 's/x86_64/x86/; s/aarch64/arm64/; s/ppc64le/powerpc/; s/mips.*/mips/')
-VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
+OUT := build
 
-BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -Wall -Werror \
-              -I$(OUT) -Ibpf
-CFLAGS     ?= -g -O2 -Wall
-CXXFLAGS   ?= -g -O2 -Wall -std=c++17
-LDLIBS     := -lbpf -lelf -lz
+PROTO_SRC := src/mysql/protocol.cpp
+CACHE_SRC := src/cache/preload.cpp src/cache/session.cpp src/cache/valkey.cpp
+TEST_SRC  := src/mysql/test_protocol.cpp
 
-.PHONY: all clean check
-all: $(OUT)/agent
+.PHONY: all clean check test-protocol
+
+all: $(OUT)/libqcache.so
 
 $(OUT):
 	mkdir -p $(OUT)
 
-# CO-RE: the type definitions come from the running kernel's own BTF, so the
-# same source builds against whatever kernel the container lands on.
-$(OUT)/vmlinux.h: | $(OUT)
-	@test -r $(VMLINUX_BTF) || { \
-		echo "error: $(VMLINUX_BTF) not readable."; \
-		echo "The kernel needs CONFIG_DEBUG_INFO_BTF and /sys must be mounted."; \
-		exit 1; }
-	$(BPFTOOL) btf dump file $(VMLINUX_BTF) format c > $@
+# The preload library is what gets injected into a client process. It is
+# self-contained on purpose: anything linked here lands in the address space
+# of every traced application.
+$(OUT)/libqcache.so: $(CACHE_SRC) $(PROTO_SRC) | $(OUT)
+	$(CXX) $(CXXFLAGS) -shared $(CACHE_SRC) $(PROTO_SRC) -o $@ -ldl -lpthread
 
-# mysql_reroute.bpf.c uses uprobes on a client library, not kernel
-# tracepoints -- it does not touch vmlinux.h's contents, but still includes
-# it for the plain __u8/__u32/... typedefs, so the dependency stays.
-$(OUT)/mysql_reroute.bpf.o: bpf/mysql_reroute.bpf.c bpf/mysql_reroute.h bpf/proto.h $(OUT)/vmlinux.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
-	@command -v llvm-strip >/dev/null && llvm-strip -g $@ || true
+$(OUT)/test_protocol: $(TEST_SRC) $(PROTO_SRC) | $(OUT)
+	$(CXX) $(CXXFLAGS) $(TEST_SRC) $(PROTO_SRC) -o $@
 
-$(OUT)/mysql_reroute.skel.h: $(OUT)/mysql_reroute.bpf.o
-	$(BPFTOOL) gen skeleton $< > $@
+test-protocol: $(OUT)/test_protocol
+	./$(OUT)/test_protocol
 
-$(OUT)/agent: src/agent.cpp $(OUT)/mysql_reroute.skel.h
-	$(CXX) $(CXXFLAGS) -I$(OUT) -Ibpf $< $(LDLIBS) -o $@
-
-# Translator unit tests need neither root nor a kernel.
-check:
+# Protocol framing tests need no kernel, no root and no database -- which is
+# the main practical benefit of having moved this logic out of BPF C.
+check: test-protocol
 	python3 -m unittest discover -s translator -p 'test_*.py' -v
 
 clean:

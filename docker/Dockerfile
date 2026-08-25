@@ -35,11 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # get their own venv rather than fighting with pip.
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
-# mysqlclient (imported as MySQLdb) is a C extension linking libmariadb.so,
-# needed for app/workload.py to be observable by the agent's uprobe
-# mechanism (see bpf/mysql_reroute.bpf.c) -- PyMySQL and mysql-connector-
-# python's default "pure" mode are pure-Python reimplementations with no
-# native library in the loop at all, so they cannot be uprobed this way.
+# Several MySQL drivers, deliberately: the cache hooks the shared TLS library
+# rather than any driver's internals, so pure-Python clients (PyMySQL) and C
+# extensions (mysqlclient) are both observable and both worth demonstrating.
 RUN pip install --no-cache-dir PyMySQL==1.1.1 redis==5.2.1 \
         mysqlclient==2.2.8 Flask==3.1.0
 

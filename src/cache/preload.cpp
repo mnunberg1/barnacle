@@ -76,6 +76,9 @@ int (*real_SSL_write_ex)(SSL *, const void *, size_t, size_t *);
 int (*real_SSL_read_ex)(SSL *, void *, size_t, size_t *);
 ssize_t (*real_read)(int, void *, size_t);
 ssize_t (*real_recv)(int, void *, size_t, int);
+ssize_t (*real_write)(int, const void *, size_t);
+ssize_t (*real_send)(int, const void *, size_t, int);
+int (*real_close)(int);
 
 void *resolve(void **slot, const char *name)
 {
@@ -117,9 +120,22 @@ struct Config {
 };
 
 Config g_cfg;
-Valkey g_valkey;
-std::mutex g_valkey_lock;
 bool g_ready;
+
+/* Leaked for the same reason as the connection map below: teardown ordering. */
+Valkey &valkey()
+{
+	static Valkey *v = new Valkey();
+
+	return *v;
+}
+
+std::mutex &valkey_lock()
+{
+	static std::mutex *m = new std::mutex();
+
+	return *m;
+}
 
 void logf(const char *fmt, ...)
 {
@@ -201,21 +217,93 @@ void ensureInit()
 	loadConfig();
 }
 
+/* --- reentrancy guard ----------------------------------------------------
+ *
+ * Our own hooks must never re-enter themselves. Two ways that happens:
+ * logging calls fprintf, which calls write(); and the Valkey client does
+ * socket I/O of its own. Either would take a non-recursive mutex twice on
+ * one thread and deadlock. Anything reached while the guard is held falls
+ * straight through to the real function.
+ */
+thread_local bool t_in_hook;
+
+struct HookGuard {
+	bool ok;
+
+	HookGuard() : ok(!t_in_hook)
+	{
+		if (ok) {
+			t_in_hook = true;
+		}
+	}
+	~HookGuard()
+	{
+		if (ok) {
+			t_in_hook = false;
+		}
+	}
+};
+
 /* --- per-connection state ------------------------------------------------
  *
- * Keyed by SSL* rather than fd: it is the handle every hook already has, and
- * it stays stable for the life of the session. Connections are per-thread in
- * the clients this targets, but the map is guarded anyway since a pooled
- * client may hand one off between threads.
+ * Keyed by file descriptor rather than SSL*, because the interesting part of
+ * a connection happens before an SSL* exists.
+ *
+ * MySQL negotiates capabilities in PLAINTEXT: the server's greeting and the
+ * client's reply are both sent in the clear, and only then does the socket
+ * upgrade to TLS. Those capabilities decide result-set framing
+ * (CLIENT_DEPRECATE_EOF) and where the statement text begins
+ * (CLIENT_QUERY_ATTRIBUTES), so we have to observe the handshake through the
+ * raw read()/write() hooks and then join that state up with the SSL_* traffic
+ * that follows. The fd is the only identifier common to both phases --
+ * SSL_get_fd() bridges from an SSL* back to it.
+ *
+ * Without this the capabilities default to zero and both of the above are
+ * guessed, which is the exact failure mode this project has hit before.
  */
-std::mutex g_conn_lock;
-std::map<SSL *, Connection> g_conns;
-
-Connection &conn_for(SSL *ssl)
+/* Deliberately heap-allocated and never freed.
+ *
+ * A preload library outlives its own static destructors: close() in
+ * particular is called by libc during process teardown, after namespace-scope
+ * objects have already been destroyed. Touching a destroyed std::map or
+ * std::mutex from there is undefined behaviour, and in practice aborts. The
+ * standard fix for interposition libraries is to leak these on purpose --
+ * the process is exiting anyway.
+ */
+std::mutex &conn_lock()
 {
-	std::lock_guard<std::mutex> g(g_conn_lock);
+	static std::mutex *m = new std::mutex();
 
-	return g_conns[ssl];
+	return *m;
+}
+
+std::map<int, Connection> &conns()
+{
+	static std::map<int, Connection> *m = new std::map<int, Connection>();
+
+	return *m;
+}
+
+Connection &conn_for(int fd)
+{
+	std::lock_guard<std::mutex> g(conn_lock());
+
+	return conns()[fd];
+}
+
+void forget_conn(int fd)
+{
+	std::lock_guard<std::mutex> g(conn_lock());
+
+	conns().erase(fd);
+}
+
+int (*real_SSL_get_fd)(const SSL *);
+
+int fd_of(SSL *ssl)
+{
+	resolve((void **)&real_SSL_get_fd, "SSL_get_fd");
+	return real_SSL_get_fd ? real_SSL_get_fd(ssl) : -1;
 }
 
 /* What a hit owes the caller. Per-thread because a suppressed query and its
@@ -258,38 +346,112 @@ bool armInjection(std::vector<uint8_t> resp, uint8_t start_seq)
  *
  * Returns true if the caller should suppress the real write.
  */
-bool onWrite(SSL *ssl, const void *buf, size_t len)
+/* Observe the plaintext handshake on the raw socket, before TLS exists.
+ * Called from the read()/write() hooks, never from the SSL_* ones. */
+/* Does this buffer actually begin with a well-formed MySQL packet that
+ * accounts for exactly its length?
+ *
+ * Necessary because parseClientHandshake() accepts any buffer of 32+ bytes --
+ * it has no way to know what it is looking at. Without this check the
+ * plaintext hooks happily "parse" a TLS ClientHello, or a write to stdout, as
+ * a MySQL handshake and poison the connection's capabilities with garbage.
+ * Requiring the declared payload length to match the buffer exactly is a
+ * cheap, strong filter. */
+bool looksLikeMysqlPacket(const uint8_t *p, size_t len)
+{
+	if (len <= mysql::kHeaderLen) {
+		return false;
+	}
+	uint32_t plen = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+
+	return plen == len - mysql::kHeaderLen;
+}
+
+void observeHandshakeOut(int fd, const void *buf, size_t len)
+{
+	Connection &c = conn_for(fd);
+	const uint8_t *p = (const uint8_t *)buf;
+	ClientHandshake ch;
+
+	/* Once the SSLRequest has gone out, everything further on this socket
+	 * is TLS records. Continuing to parse them as MySQL is how the
+	 * capabilities got corrupted before this guard existed. */
+	if (c.handshake_done || c.tls) {
+		return;
+	}
+	if (!looksLikeMysqlPacket(p, len)) {
+		return;
+	}
+	if (!parseClientHandshake(p + mysql::kHeaderLen, len - mysql::kHeaderLen, ch)) {
+		return;
+	}
+	c.caps = negotiate(c.server_caps, ch.capabilities);
+	if (ch.ssl_request) {
+		/* Truncated form: the connection is about to go encrypted.
+		 * This is the reliable TLS signal -- far better than trying to
+		 * infer it from whether later bytes parse as MySQL, since the
+		 * greeting is plaintext on every connection either way. */
+		c.tls = true;
+		logf("fd %d: TLS upgrade requested; client caps=0x%08x", fd,
+		     ch.capabilities);
+	} else {
+		c.handshake_done = true;
+		logf("fd %d: handshake done; caps=0x%08x deprecate_eof=%d query_attrs=%d",
+		     fd, c.caps, (c.caps & CLIENT_DEPRECATE_EOF) ? 1 : 0,
+		     (c.caps & CLIENT_QUERY_ATTRIBUTES) ? 1 : 0);
+	}
+}
+
+void observeHandshakeIn(int fd, const void *buf, size_t len)
+{
+	Connection &c = conn_for(fd);
+	mysql::MessageReader r;
+	mysql::Message m;
+	ServerHandshake sh;
+
+	if (c.server_caps != 0 || c.tls) {
+		return;
+	}
+	if (!looksLikeMysqlPacket((const uint8_t *)buf, len)) {
+		return;
+	}
+	r.append((const uint8_t *)buf, len);
+	if (!r.next(m)) {
+		return;
+	}
+	if (!parseServerHandshake(m.payload.data(), m.payload.size(), sh)) {
+		return;
+	}
+	c.server_caps = sh.capabilities;
+	logf("fd %d: server greeting %s caps=0x%08x", fd, sh.server_version.c_str(),
+	     sh.capabilities);
+}
+
+bool onWrite(int fd, const void *buf, size_t len)
 {
 	ensureInit();
-	if (!g_cfg.enabled || len < mysql::kHeaderLen) {
+	if (!g_cfg.enabled || len < mysql::kHeaderLen || fd < 0) {
 		return false;
 	}
 
-	Connection &c = conn_for(ssl);
+	Connection &c = conn_for(fd);
 	const uint8_t *p = (const uint8_t *)buf;
 
-	/* Before the handshake completes, watch the client's reply so we
-	 * learn the negotiated capabilities -- which determine result-set
-	 * framing and query-attribute layout later on. Both the SSLRequest
-	 * and the real HandshakeResponse arrive here. */
+	/* If the handshake was observed in plaintext we already have the
+	 * negotiated capabilities. If it was not -- for instance because this
+	 * library attached mid-connection -- fall back to whatever the client
+	 * advertises here, which still beats assuming zero. */
 	if (!c.handshake_done) {
 		ClientHandshake ch;
 
 		if (parseClientHandshake(p + mysql::kHeaderLen, len - mysql::kHeaderLen,
-					  ch)) {
+					  ch) &&
+		    !ch.ssl_request) {
 			c.caps = negotiate(c.server_caps, ch.capabilities);
-			if (ch.ssl_request) {
-				c.tls = true;
-				logf("connection is upgrading to TLS");
-			} else {
-				c.handshake_done = true;
-				logf("handshake done; caps=0x%08x deprecate_eof=%d "
-				     "query_attrs=%d",
-				     c.caps, (c.caps & CLIENT_DEPRECATE_EOF) ? 1 : 0,
-				     (c.caps & CLIENT_QUERY_ATTRIBUTES) ? 1 : 0);
-			}
+			c.handshake_done = true;
+			logf("fd %d: handshake seen post-TLS; caps=0x%08x", fd, c.caps);
+			return false;
 		}
-		return false;
 	}
 
 	std::string_view sql;
@@ -301,6 +463,14 @@ bool onWrite(SSL *ssl, const void *buf, size_t len)
 	std::string stmt = trim(std::string(sql));
 
 	c.reset();
+
+	/* Track the response to EVERY statement, cacheable or not. This is how
+	 * transaction state is learned: the IN_TRANS flag arrives on the
+	 * response to whatever opened the transaction, and that statement is
+	 * not itself something we would cache. */
+	c.awaiting_response = true;
+	c.tracker.begin(c.caps);
+	c.response_reader.reset();
 
 	if (c.in_transaction) {
 		/* Reads inside a transaction may observe uncommitted state.
@@ -319,10 +489,10 @@ bool onWrite(SSL *ssl, const void *buf, size_t len)
 	bool found;
 
 	{
-		std::lock_guard<std::mutex> g(g_valkey_lock);
+		std::lock_guard<std::mutex> g(valkey_lock());
 
-		g_valkey.connect(g_cfg.valkey_host, g_cfg.valkey_port);
-		found = g_valkey.get(cacheKey(c, stmt), hit);
+		valkey().connect(g_cfg.valkey_host, g_cfg.valkey_port);
+		found = valkey().get(cacheKey(c, stmt), hit);
 	}
 
 	if (found && !hit.empty() && armInjection(std::move(hit), start_seq)) {
@@ -333,43 +503,30 @@ bool onWrite(SSL *ssl, const void *buf, size_t len)
 	logf("MISS %s", stmt.c_str());
 	c.pending_query = stmt;
 	c.capturing = true;
-	c.tracker.begin(c.caps);
-	c.response_reader.reset();
 	return false;
 }
 
 /* --- incoming: capture responses, complete hits ------------------------- */
 
-void onRead(SSL *ssl, const void *buf, size_t len)
+void onRead(int fd, const void *buf, size_t len)
 {
-	Connection &c = conn_for(ssl);
-
-	/* Learn the server's capabilities from its greeting. This is
-	 * plaintext on every connection, including ones about to go TLS,
-	 * which is exactly why it is worth reading here. */
-	if (!c.handshake_done && c.server_caps == 0) {
-		mysql::MessageReader r;
-		mysql::Message m;
-
-		r.append((const uint8_t *)buf, len);
-		if (r.next(m)) {
-			ServerHandshake sh;
-
-			if (parseServerHandshake(m.payload.data(), m.payload.size(),
-						  sh)) {
-				c.server_caps = sh.capabilities;
-				logf("server greeting: %s caps=0x%08x",
-				     sh.server_version.c_str(), sh.capabilities);
-			}
-		}
-	}
-
-	if (!c.capturing) {
+	if (fd < 0) {
 		return;
 	}
 
-	c.captured.insert(c.captured.end(), (const uint8_t *)buf,
-			   (const uint8_t *)buf + len);
+	Connection &c = conn_for(fd);
+
+	if (!c.awaiting_response) {
+		return;
+	}
+
+	/* Bytes are only hoarded for statements we mean to cache; the reader
+	 * runs for all of them, because transaction state has to be observed
+	 * regardless. */
+	if (c.capturing) {
+		c.captured.insert(c.captured.end(), (const uint8_t *)buf,
+				   (const uint8_t *)buf + len);
+	}
 	c.response_reader.append((const uint8_t *)buf, len);
 
 	mysql::Message m;
@@ -394,10 +551,10 @@ void onRead(SSL *ssl, const void *buf, size_t len)
 		}
 
 		if (ok && !c.pending_query.empty() && !c.captured.empty()) {
-			std::lock_guard<std::mutex> g(g_valkey_lock);
+			std::lock_guard<std::mutex> g(valkey_lock());
 
-			g_valkey.connect(g_cfg.valkey_host, g_cfg.valkey_port);
-			if (g_valkey.setex(cacheKey(c, c.pending_query), c.captured,
+			valkey().connect(g_cfg.valkey_host, g_cfg.valkey_port);
+			if (valkey().setex(cacheKey(c, c.pending_query), c.captured,
 					    g_cfg.ttl)) {
 				logf("STORED %s (%zu bytes, ttl=%ds)",
 				     c.pending_query.c_str(), c.captured.size(),
@@ -439,8 +596,12 @@ extern "C" {
 int SSL_write(SSL *ssl, const void *buf, int num)
 {
 	ensureInit();
-	if (num > 0 && onWrite(ssl, buf, (size_t)num)) {
-		return num; /* suppressed; report success */
+	{
+		HookGuard g;
+
+		if (g.ok && num > 0 && onWrite(fd_of(ssl), buf, (size_t)num)) {
+			return num; /* suppressed; report success */
+		}
 	}
 	resolve((void **)&real_SSL_write, "SSL_write");
 	return real_SSL_write(ssl, buf, num);
@@ -449,20 +610,28 @@ int SSL_write(SSL *ssl, const void *buf, int num)
 int SSL_write_ex(SSL *ssl, const void *buf, size_t num, size_t *written)
 {
 	ensureInit();
-	if (num > 0 && onWrite(ssl, buf, num)) {
-		if (written) {
-			*written = num;
+	{
+		HookGuard g;
+
+		if (g.ok && num > 0 && onWrite(fd_of(ssl), buf, num)) {
+			if (written) {
+				*written = num;
+			}
+			return 1;
 		}
-		return 1;
 	}
 	resolve((void **)&real_SSL_write_ex, "SSL_write_ex");
 	return real_SSL_write_ex(ssl, buf, num, written);
 }
 
-/* While a response is owed, never block and never let bytes reach the TLS
- * record layer. EINTR rather than EAGAIN: it is legal on both blocking and
+/* Plaintext side. Two jobs: hold the client off while a cached response is
+ * owed, and watch the pre-TLS handshake go by so the negotiated capabilities
+ * are known rather than assumed.
+ *
+ * EINTR rather than EAGAIN for the hold-off: it is legal on both blocking and
  * non-blocking descriptors, whereas EAGAIN nominally cannot occur on a
- * blocking one and some client code treats it as fatal there. */
+ * blocking one and some client code treats it as fatal there.
+ */
 ssize_t read(int fd, void *buf, size_t count)
 {
 	ensureInit();
@@ -470,7 +639,17 @@ ssize_t read(int fd, void *buf, size_t count)
 		errno = EINTR;
 		return -1;
 	}
-	return real_read(fd, buf, count);
+
+	ssize_t ret = real_read(fd, buf, count);
+
+	if (ret > 0) {
+		HookGuard g;
+
+		if (g.ok) {
+			observeHandshakeIn(fd, buf, (size_t)ret);
+		}
+	}
+	return ret;
 }
 
 ssize_t recv(int fd, void *buf, size_t len, int flags)
@@ -480,7 +659,62 @@ ssize_t recv(int fd, void *buf, size_t len, int flags)
 		errno = EINTR;
 		return -1;
 	}
-	return real_recv(fd, buf, len, flags);
+
+	ssize_t ret = real_recv(fd, buf, len, flags);
+
+	if (ret > 0) {
+		HookGuard g;
+
+		if (g.ok) {
+			observeHandshakeIn(fd, buf, (size_t)ret);
+		}
+	}
+	return ret;
+}
+
+ssize_t write(int fd, const void *buf, size_t count)
+{
+	ensureInit();
+	{
+		HookGuard g;
+
+		if (g.ok && count > 0) {
+			observeHandshakeOut(fd, buf, count);
+		}
+	}
+	resolve((void **)&real_write, "write");
+	return real_write(fd, buf, count);
+}
+
+ssize_t send(int fd, const void *buf, size_t len, int flags)
+{
+	ensureInit();
+	{
+		HookGuard g;
+
+		if (g.ok && len > 0) {
+			observeHandshakeOut(fd, buf, len);
+		}
+	}
+	resolve((void **)&real_send, "send");
+	return real_send(fd, buf, len, flags);
+}
+
+/* Connections are keyed by fd, and fds are recycled. Without this a later
+ * connection would inherit the previous occupant's capabilities and
+ * transaction state. */
+int close(int fd)
+{
+	ensureInit();
+	{
+		HookGuard g;
+
+		if (g.ok && fd >= 0) {
+			forget_conn(fd);
+		}
+	}
+	resolve((void **)&real_close, "close");
+	return real_close(fd);
 }
 
 int SSL_read(SSL *ssl, void *buf, int num)
@@ -497,7 +731,11 @@ int SSL_read(SSL *ssl, void *buf, int num)
 	int ret = real_SSL_read(ssl, buf, num);
 
 	if (ret > 0) {
-		onRead(ssl, buf, (size_t)ret);
+		HookGuard g;
+
+		if (g.ok) {
+			onRead(fd_of(ssl), buf, (size_t)ret);
+		}
 	}
 	return ret;
 }
@@ -519,7 +757,11 @@ int SSL_read_ex(SSL *ssl, void *buf, size_t num, size_t *readbytes)
 	int ret = real_SSL_read_ex(ssl, buf, num, readbytes);
 
 	if (ret == 1 && readbytes && *readbytes > 0) {
-		onRead(ssl, buf, *readbytes);
+		HookGuard g;
+
+		if (g.ok) {
+			onRead(fd_of(ssl), buf, *readbytes);
+		}
 	}
 	return ret;
 }

@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """workload.py - a stand-in application, unaware it is being observed.
 
-Issues a steady stream of queries against the demo `shop` database using
-mysqlclient (imported as MySQLdb) -- a C extension that dynamically links
-libmariadb.so, chosen specifically because it does, unlike PyMySQL (used
-elsewhere in this project) or mysql-connector-python's default "pure" mode.
-The agent's capture mechanism uprobes mysql_real_query() in that shared
-library (see bpf/mysql_reroute.bpf.c) -- a pure-Python reimplementation of
-the wire protocol has no such function to hook at all, so this script would
-be invisible to it if it used one of those instead.
+Issues a steady stream of queries against the demo `shop` database.
+
+The choice of driver no longer affects visibility: the cache hooks the TLS
+library every client shares rather than any particular driver's internals, so
+pure-Python drivers and C extensions are observed alike.
 
 Most queries are cheap lookups against the tiny demo dataset. A few are
 deliberately expensive via SLEEP(), standing in for the kind of slow query a

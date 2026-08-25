@@ -89,7 +89,18 @@ struct Connection {
 	 * caching them would leak one session's view into others. */
 	bool in_transaction = false;
 
-	/* The statement currently in flight, if it is one we might cache. */
+	/* A response is outstanding for this connection.
+	 *
+	 * Set for EVERY statement, not only cacheable ones. Transaction state
+	 * arrives on the response to whatever opened the transaction --
+	 * typically `START TRANSACTION`, which is not itself cacheable -- so a
+	 * tracker that only ran for cacheable statements would never see the
+	 * IN_TRANS flag and would happily cache reads inside a transaction.
+	 * That is a correctness bug, not an optimization gap: those reads can
+	 * observe uncommitted state private to one session. */
+	bool awaiting_response = false;
+
+	/* The statement in flight, set only when it is one we intend to cache. */
 	std::string pending_query;
 	bool capturing = false;
 
@@ -104,6 +115,7 @@ struct Connection {
 
 	void reset()
 	{
+		awaiting_response = false;
 		pending_query.clear();
 		capturing = false;
 		captured.clear();

@@ -7,9 +7,10 @@ services:
       MYSQL_DATABASE: shop
       MYSQL_USER: app
       MYSQL_PASSWORD: apppw
-    # mysql_native_password is off by default in 8.4. Re-enabling it lets the
-    # demo clients connect in plaintext; TLS would encrypt the query text
-    # before write(), leaving the tracer nothing to match on.
+    # mysql_native_password is off by default in 8.4; re-enabling it keeps the
+    # demo's auth simple. TLS is no longer a problem for us: the cache
+    # intercepts inside the client, above its TLS library, so encrypted
+    # connections are the normal case rather than a blind spot.
     command: ["--mysql-native-password=ON"]
     ports:
       - "13306:3306"
@@ -43,7 +44,8 @@ services:
     pid: host
     volumes:
       - .:/workspace
-      # Tracepoint attach reads the event ids out of tracefs/debugfs.
+      # Retained for eBPF experiments under spike/; the cache itself needs
+      # neither of these, nor any kernel support at all.
       - /sys/kernel/debug:/sys/kernel/debug
       - /sys/fs/bpf:/sys/fs/bpf
     ports:

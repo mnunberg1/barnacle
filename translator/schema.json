@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Maps MySQL tables onto Valkey Search indexes. The translator needs the",
+    "column types because the query syntax differs per type: TAG uses",
+    "@f:{value}, NUMERIC uses @f:[min max], TEXT uses @f:\"phrase\".",
+    "demo/mirror.py uses the same file to build FT.CREATE and copy rows in.",
+    "",
+    "Per-column options:",
+    "  sortable    NUMERIC only; required to use the column in ORDER BY.",
+    "  suffix_trie TEXT only; needed for LIKE '%x' and LIKE '%x%'.",
+    "  separator   TAG only; defaults to \\u0001 so that a scalar SQL value",
+    "              containing a comma is not indexed as several tags. Set it",
+    "              to ',' for columns that really do hold a delimited list."
+  ],
+  "tables": {
+    "products": {
+      "index": "idx:products",
+      "prefix": "product:",
+      "key_column": "sku",
+      "columns": {
+        "sku": { "type": "TAG" },
+        "name": { "type": "TEXT", "suffix_trie": true },
+        "description": { "type": "TEXT", "suffix_trie": true },
+        "category": { "type": "TAG" },
+        "brand": { "type": "TAG" },
+        "price": { "type": "NUMERIC", "sortable": true },
+        "stock": { "type": "NUMERIC", "sortable": true },
+        "rating": { "type": "NUMERIC", "sortable": true }
+      }
+    },
+    "orders": {
+      "index": "idx:orders",
+      "prefix": "order:",
+      "key_column": "id",
+      "columns": {
+        "id": { "type": "TAG" },
+        "customer": { "type": "TAG" },
+        "sku": { "type": "TAG" },
+        "status": { "type": "TAG" },
+        "qty": { "type": "NUMERIC", "sortable": true },
+        "total": { "type": "NUMERIC", "sortable": true }
+      }
+    }
+  }
+}

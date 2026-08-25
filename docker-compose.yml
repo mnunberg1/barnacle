@@ -1,0 +1,66 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: vebpf-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: shop
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppw
+    # mysql_native_password is off by default in 8.4. Re-enabling it lets the
+    # demo clients connect in plaintext; TLS would encrypt the query text
+    # before write(), leaving the tracer nothing to match on.
+    command: ["--mysql-native-password=ON"]
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./demo/seed_mysql.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-prootpw"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  valkey:
+    # valkey-bundle ships the valkey-search module (FT.CREATE / FT.SEARCH).
+    image: valkey/valkey-bundle:latest
+    container_name: vebpf-valkey
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bpf:
+    build:
+      context: ./docker
+    container_name: vebpf-bpf
+    # eBPF needs to load programs and read kernel BTF; host PID namespace lets
+    # the tracer see clients running in the other containers.
+    privileged: true
+    pid: host
+    volumes:
+      - .:/workspace
+      # Tracepoint attach reads the event ids out of tracefs/debugfs.
+      - /sys/kernel/debug:/sys/kernel/debug
+      - /sys/fs/bpf:/sys/fs/bpf
+    ports:
+      # app/dashboard.py -- the reroute-list latency triage UI.
+      - "18080:8080"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppw
+      MYSQL_DB: shop
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    working_dir: /workspace
+    command: ["sleep", "infinity"]

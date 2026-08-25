@@ -1,0 +1,51 @@
+D1. For now let's assume simple queries, let's also assume a single
+    database. We can develop more complex heuristics (all based on
+    tracing client information), but let's keep this part simple for now.
+
+E2. Let's assume all clients have the same capabilities, OR, we capture
+    the capabilities during the initial negotiation phase.
+
+    Do not fold it into the cache key.
+
+    Reassembly can be done in UCLIENT. that might make more sense since it
+    requires sharing less context.
+
+F1. We need some kind of locking/synchronization mechanism because the
+    stmt structure is written and read by multiple components. You can
+    decide on a synchronization primitive of your choice.
+
+H1. Yes, rewrite everything.
+
+A6. Use bpftime via attachment
+
+B6. This seems fine. EINTR seems fine for both modes, maybe we can figure
+    out some other error code that recv()/read() would return.
+    We can have a different code path for non-SSL/TLS versions, but let's
+    assume SSL/TLS for now.
+
+B7. PLAIN can be more optimized, but for now I want to focus on TLS.
+    For example, in PLAIN mode a lot more can be done on the userspace
+    agent, but let's first focus on SSL, because that's the lowest common
+    denominator, architecture-wise.
+
+C1. Yes, we would need to monitor request/response until there's an upgrade.
+    If we see a clear-text SQL statement, we can assume an upgrade will not
+    happen. Or we can use CLIENT_SSL
+
+C2. Ok, compression is transport-related; this is your job, deal with it.
+    Or just don't assume compression; strip it from the outgoing flags?
+
+C3. We can handle prepared statements if we track it at the protocol level,
+    sure, but let's keep it simple for now.
+
+B3. Let's focus on openssl first; other libraries will follow a similar
+    paradigm but are harder to debug.
+
+B4. Ok, we can do that; enter/exit SSL_write and set some kind of thread-
+    specific variable. Sure.
+
+D3. When a transaction ends, we revert to normal state.
+
+D4. We ignore when we're inside a transction.
+
+E3. Ok, fine.

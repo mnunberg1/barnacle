@@ -9,3 +9,4 @@ __pycache__/
 *.swp
 .*.sw?
 *~
+spike/libspike.so

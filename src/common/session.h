@@ -23,7 +23,7 @@
 #ifndef VALKEY_EBPF_CACHE_SESSION_H
 #define VALKEY_EBPF_CACHE_SESSION_H
 
-#include "../mysql/protocol.h"
+#include "mysql/protocol.h"
 
 #include <cstdint>
 #include <string>

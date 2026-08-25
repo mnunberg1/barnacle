@@ -25,7 +25,7 @@
 #include <bpf/libbpf.h>
 
 #include "attach_override.h"
-#include "uclient_probe.skel.h"
+#include "uclient.skel.h"
 
 /* Where libssl lives. bpf_prog_attach_uprobe_with_override() resolves the
  * symbol out of this file rather than taking a SEC() string. */
@@ -52,7 +52,7 @@ static void on_signal(int sig)
 
 int main(int argc, char **argv)
 {
-	struct uclient_probe_bpf *skel;
+	struct uclient_bpf *skel;
 	struct config cfg = {};
 	__u32 zero = 0;
 	FILE *f;
@@ -86,7 +86,7 @@ int main(int argc, char **argv)
 	}
 	cfg.reply_len = (__u32)n;
 
-	skel = uclient_probe_bpf__open_and_load();
+	skel = uclient_bpf__open_and_load();
 	if (!skel) {
 		fprintf(stderr, "open_and_load failed: %s\n", strerror(errno));
 		return 1;
@@ -94,7 +94,7 @@ int main(int argc, char **argv)
 
 	if (bpf_map_update_elem(bpf_map__fd(skel->maps.cfg), &zero, &cfg, BPF_ANY)) {
 		fprintf(stderr, "cfg update failed: %s\n", strerror(errno));
-		uclient_probe_bpf__destroy(skel);
+		uclient_bpf__destroy(skel);
 		return 1;
 	}
 
@@ -120,7 +120,7 @@ int main(int argc, char **argv)
 			    filters[i].sym)) {
 			fprintf(stderr, "attach %s failed: %s\n", filters[i].sym,
 				strerror(errno));
-			uclient_probe_bpf__destroy(skel);
+			uclient_bpf__destroy(skel);
 			return 1;
 		}
 		fprintf(stderr, "uclient: override-attached %s\n", filters[i].sym);
@@ -151,6 +151,6 @@ int main(int argc, char **argv)
 		sleep(1);
 	}
 
-	uclient_probe_bpf__destroy(skel);
+	uclient_bpf__destroy(skel);
 	return 0;
 }

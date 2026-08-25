@@ -12,7 +12,7 @@
  * Deliberately dependency-free: a tiny CHECK macro rather than a test
  * framework, matching this project's minimal-dependency build.
  */
-#include "protocol.h"
+#include "../src/common/mysql/protocol.h"
 
 #include <cstdio>
 #include <cstring>

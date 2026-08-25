@@ -36,7 +36,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
-#include "kclient.h"
+#include "../src/kclient/kclient.h"
 #include "kclient.skel.h"
 
 static int connect_pair(int *client_fd, int *server_fd, int *listen_fd)

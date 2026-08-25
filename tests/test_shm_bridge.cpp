@@ -17,7 +17,7 @@
  * production it also owns KCLIENT's real kernel sockmap -- and having its
  * bpf() syscalls intercepted would break the redirect.
  */
-#include "shm_bridge.h"
+#include "../src/agent/shm_bridge.h"
 
 #include <cstdio>
 #include <cstring>

@@ -33,7 +33,7 @@
  *      holding the pairing longer would risk a later write landing in a
  *      client that has moved on.
  */
-#include "../cache/valkey.h"
+#include "../common/valkey.h"
 #include "pipes.h"
 
 #include <arpa/inet.h>

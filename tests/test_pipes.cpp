@@ -10,7 +10,7 @@
  *
  * Needs root and a kernel with sockmap support; skipped elsewhere.
  */
-#include "pipes.h"
+#include "../src/agent/pipes.h"
 
 #include <arpa/inet.h>
 #include <cerrno>

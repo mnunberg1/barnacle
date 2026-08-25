@@ -11,3 +11,4 @@ __pycache__/
 *~
 spike/libspike.so
 build/
+*.bak

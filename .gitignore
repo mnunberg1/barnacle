@@ -12,3 +12,4 @@ __pycache__/
 spike/libspike.so
 build/
 *.bak
+compile_commands.json

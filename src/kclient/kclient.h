@@ -16,6 +16,14 @@
 #ifndef VALKEY_EBPF_KCLIENT_H
 #define VALKEY_EBPF_KCLIENT_H
 
+/* Included from two very different places: BPF programs (which already have
+ * these from vmlinux.h) and ordinary userspace. Pulling the types in directly
+ * makes it self-sufficient in both, rather than depending on include order.
+ * vmlinux.h defines them itself, hence the guard. */
+#ifndef __VMLINUX_H__
+#include <linux/types.h>
+#endif
+
 /* Identifies one TCP connection. Available identically from sock_ops (at
  * connect time) and sk_msg (on send), which is what lets the two halves
  * agree on which socket is which. IPv4 only for now.

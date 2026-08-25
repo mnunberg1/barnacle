@@ -15,7 +15,7 @@ services:
     ports:
       - "13306:3306"
     volumes:
-      - ./demo/seed_mysql.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+      - ./seed_mysql.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-prootpw"]
       interval: 5s
@@ -43,7 +43,9 @@ services:
     privileged: true
     pid: host
     volumes:
-      - .:/workspace
+      # Repo root, one level up from this compose file, mounted whole so the
+      # container can build and run the actual project, not just the demo.
+      - ..:/workspace
       # Retained for eBPF experiments under spike/; the cache itself needs
       # neither of these, nor any kernel support at all.
       - /sys/kernel/debug:/sys/kernel/debug

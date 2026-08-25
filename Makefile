@@ -1,10 +1,10 @@
 # Transparent MySQL query cache.
 #
-# Run inside the bpf container:
+# Run inside the bpf container (see demo/README.md to bring it up):
 #
-#   docker compose exec bpf make          everything
-#   docker compose exec bpf make check    tests that need no kernel or root
-#   docker compose exec bpf make test     everything, including privileged tests
+#   docker compose -f demo/docker-compose.yml exec bpf make          everything
+#   docker compose -f demo/docker-compose.yml exec bpf make check    tests that need no kernel or root
+#   docker compose -f demo/docker-compose.yml exec bpf make test     everything, including privileged tests
 #
 # Components:
 #

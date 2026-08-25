@@ -26,7 +26,7 @@ else()
     message(STATUS
         "valkey-qcache: non-Linux host (${CMAKE_SYSTEM_NAME}) -- configuring "
         "against ide_shims/ for editor support only. eBPF does not exist here; "
-        "build with 'docker compose exec bpf make'.")
+        "build with 'docker compose -f demo/docker-compose.yml exec bpf make'.")
 endif()
 
 # --- always native: no Linux-only headers involved -----------------------

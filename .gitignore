@@ -13,3 +13,12 @@ spike/libspike.so
 build/
 *.bak
 compile_commands.json
+
+# Real, per-deployment qcache config: which processes to attach to and which
+# queries to cache is specific to each machine/deployment. Copy the checked-in
+# config/*.example templates to these paths and fill in local values. The
+# demo's own config lives under demo/config/ and is checked in as-is, since
+# it is pinned to the reproducible docker-compose environment rather than any
+# particular machine.
+/config/qcache.conf
+/config/cache.list

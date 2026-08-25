@@ -1,10 +1,10 @@
-# Phase 1 Spike — Findings
+# TLS interception: what was verified, and what it cost
 
 **Verdict: the architecture holds. All three assumptions validated end-to-end
 against a real MySQL server over a real TLS connection.**
 
-Run `make -C spike` inside the `bpf` container to reproduce; see
-`ssl_intercept.c` for the mechanism and the exact commands.
+These were established experimentally against a live MySQL server, before
+any of the current implementation was written.
 
 ## What was tested
 

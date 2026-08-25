@@ -2,7 +2,7 @@
 /*
  * test_pipes.cpp - the agent_pipe pool against the real KCLIENT redirect.
  *
- * Goes further than spike/redirect_test.c: that proved a hand-built pair
+ * Goes further than tests/test_redirect.c: that proved a hand-built pair
  * could redirect, this proves the pooled implementation does -- acquire a
  * pipe, write the mini-protocol, see it wake an epoll client, release, and
  * confirm the pairing is gone so a released pipe cannot leak into a client

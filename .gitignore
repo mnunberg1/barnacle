@@ -10,3 +10,4 @@ __pycache__/
 .*.sw?
 *~
 spike/libspike.so
+build/

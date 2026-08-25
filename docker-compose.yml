@@ -48,9 +48,6 @@ services:
       # neither of these, nor any kernel support at all.
       - /sys/kernel/debug:/sys/kernel/debug
       - /sys/fs/bpf:/sys/fs/bpf
-    ports:
-      # app/dashboard.py -- the reroute-list latency triage UI.
-      - "18080:8080"
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"

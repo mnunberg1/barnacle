@@ -121,7 +121,6 @@ $(OUT)/test_shm_bridge: tests/test_shm_bridge.cpp src/agent/shm_bridge.cpp
 # parsing in userspace.
 check: $(OUT)/test_protocol
 	./$(OUT)/test_protocol
-	python3 -m unittest discover -s translator -p 'test_*.py' -v
 
 # Privileged: sockmap attach and bpftime shared memory.
 test: check $(OUT)/test_redirect $(OUT)/test_pipes

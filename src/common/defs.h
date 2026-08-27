@@ -223,9 +223,21 @@ struct conn_info {
  * Held in sk_storage on the socket itself, so it cannot go stale relative to
  * the socket and is freed when the socket is. A released pipe cannot leave a
  * dangling pairing behind that would misdeliver a later write.
+ *
+ * `key` is the serial, and one serial names both halves: the client socket is
+ * cpipe_map[key] and the daemon socket is dpipe_map[key]. dpipe[n] is spliced
+ * to cpipe[n] and to nothing else, so a program that knows its own serial
+ * knows its peer's without being told -- it redirects into the opposite map
+ * at the same index. Both sides therefore store the same value here, and
+ * there is no pairing table anywhere to disagree with.
+ *
+ * A descriptor is never a key. sk_storage is addressed by socket because that
+ * is what the map type is -- data hanging off the socket, which is the only
+ * place a program holding nothing but `msg->sk` can find out which serial it
+ * is. Everything the serial then names is indexed by the serial.
  */
 struct pipe_sk_info {
-	__u32 peer_key;
+	__u32 key;    /* this socket is cpipe_map[key] or dpipe_map[key] */
 	__u32 paired; /* 0 while the socket is not hijacked */
 };
 
@@ -256,7 +268,6 @@ struct dpipe {
 	__u32 sfd; /* the daemon's i/o end, and what dpipe_map holds */
 	__u64 ts;  /* last activity, for the LRU sweep */
 	struct stmt __arena *stmt;
-	__u32 cpipe_key; /* the client's index in cpipe_map */
 	__u32 in_use;
 };
 

@@ -489,7 +489,7 @@ void Daemon::serve(int fd)
 		qcd::Pipe *p = pool.byKey(key);
 		struct pipe_sk_info ci {};
 
-		ci.peer_key = rec.cpipe_key; /* our peer: the client's index */
+		ci.key = key; /* dpipe[key] is spliced to cpipe[key] */
 		ci.paired = 1;
 		/* On sfd: the socket we are about to send from, and the one
 		 * sk_msg will consult. */

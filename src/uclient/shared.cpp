@@ -198,7 +198,6 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
 	/* Point the pipe at the statement. This is what lets the request carry
 	 * nothing but a key: everything else hangs off the pipe. */
 	rec.stmt = (struct stmt *)(unsigned long)ref;
-	rec.cpipe_key = key;
 	rec.in_use = 1;
 	qc_bpf_update(g_dpipes_fd, &key, &rec, 0);
 
@@ -206,7 +205,7 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
 	 * the daemon could not do this for us even if it wanted to. */
 	struct pipe_sk_info si {};
 
-	si.peer_key = key;
+	si.key = key;
 	si.paired = 1;
 	if (qc_bpf_update(g_cpipes_fd, &key, &sock, 0) ||
 	    qc_bpf_update(g_info_fd, &sock, &si, 0)) {

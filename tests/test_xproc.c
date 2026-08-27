@@ -14,10 +14,10 @@
  * socket, but the application can, because it owns the fd. So each side
  * registers its own:
  *
- *   child   inserts its DB socket into cpipe_map[CPIPE_KEY] and sets
- *           its own sk_storage to point at DPIPE_KEY
- *   parent  inserts its dpipe into dpipe_map[DPIPE_KEY] and sets that
- *           socket's sk_storage to point at CPIPE_KEY
+ *   child   inserts its DB socket into cpipe_map[PIPE_KEY] and sets
+ *           its own sk_storage to point at PIPE_KEY
+ *   parent  inserts its dpipe into dpipe_map[PIPE_KEY] and sets that
+ *           socket's sk_storage to point at PIPE_KEY
  *
  * Neither needs a sockops program, a cgroup attach, or a 5-tuple. The maps
  * are reached through bpffs pins, which is how UCLIENT's loader will reach
@@ -69,8 +69,9 @@
 
 /* Fixed indices. In production these come from dpipes_meta.serial and the
  * freelist; the test needs only that both sides agree. */
-#define DPIPE_KEY 1
-#define CPIPE_KEY 1
+/* One serial names both halves: dpipe_map[PIPE_KEY] is spliced to
+ * cpipe_map[PIPE_KEY]. */
+#define PIPE_KEY 1
 
 #define WAIT_MS 3000
 #define BODY "REDIRECT-PROVES-IT"
@@ -81,12 +82,14 @@ struct child_report {
 	char buf[256];
 };
 
-/* Splice a socket we own: put it in its map, then record which index in the
- * opposite map it is paired with. Both calls work on a plain fd because we
- * own it -- which is the entire reason no kernel program is involved. */
-static int splice(int sockmap_fd, __u32 key, int info_fd, __u32 peer_key, int fd)
+/* Splice a socket we own: put it in its map at `key`, then record that serial
+ * on the socket. The program redirects into the OPPOSITE map at the same
+ * index, so this one value covers both halves. Both calls work on a plain fd
+ * because we own it -- which is the entire reason no kernel program is
+ * involved in registering. */
+static int splice(int sockmap_fd, __u32 key, int info_fd, int fd)
 {
-	struct pipe_sk_info info = { .peer_key = peer_key, .paired = 1 };
+	struct pipe_sk_info info = { .key = key, .paired = 1 };
 
 	if (bpf_map_update_elem(sockmap_fd, &key, &fd, BPF_ANY)) {
 		fprintf(stderr, "sockmap insert failed: %s\n", strerror(errno));
@@ -171,7 +174,7 @@ static int run_child(int port, int rfd, int wfd)
 
 	/* Hijack our own socket: from here its remote end is the dpipe, not
 	 * the server we just connected to. */
-	if (splice(cpipes, CPIPE_KEY, info, DPIPE_KEY, fd)) {
+	if (splice(cpipes, PIPE_KEY, info, fd)) {
 		return 1;
 	}
 	if (write_all(wfd, "r", 1)) {
@@ -369,7 +372,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "dpipe failed: %s\n", strerror(errno));
 		goto out;
 	}
-	if (splice(dpipes_fd, DPIPE_KEY, info_fd, CPIPE_KEY, dp_a)) {
+	if (splice(dpipes_fd, PIPE_KEY, info_fd, dp_a)) {
 		if (use_socketpair) {
 			printf("RESULT: sock_map would not take the AF_UNIX socket.\n"
 			       "        socketpair(2) cannot back a dpipe.\n");
@@ -382,7 +385,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "client pair failed: %s\n", strerror(errno));
 			goto out;
 		}
-		if (splice(cpipes_fd, CPIPE_KEY, info_fd, DPIPE_KEY, cl_a)) {
+		if (splice(cpipes_fd, PIPE_KEY, info_fd, cl_a)) {
 			goto out;
 		}
 	} else {

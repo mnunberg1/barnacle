@@ -77,7 +77,16 @@ char LICENSE[] SEC("license") = "GPL";
  * state.
  */
 
-/* Daemon-side dpipe sockets, keyed by dpipes_meta.serial. */
+/*
+ * The two sockmaps, both keyed by dpipes_meta.serial and by nothing else.
+ *
+ * dpipe_map[n] is spliced to cpipe_map[n]: one serial, both halves. So a
+ * redirect is the same index in the other map, and there is no pairing table
+ * to consult, to keep consistent, or to get wrong. A descriptor appears here
+ * only as a value, because that is how a socket is put into a sockmap.
+ */
+
+/* Daemon-side dpipe sockets. */
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
 	__uint(max_entries, QC_MAX_PIPES);
@@ -95,8 +104,18 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } cpipe_map SEC(".maps");
 
-/* Which index in the opposite map this socket is spliced to. Attached to the
- * socket, so it is freed with it and can never outlive what it points at. */
+/*
+ * The serial this socket was assigned.
+ *
+ * This is how a program holding nothing but msg->sk learns which pipe it is:
+ * there is no helper that reports a socket's own index in a sockmap, so the
+ * serial has to be hung on the socket. sk_storage is addressed by socket
+ * because that is what the map type is -- the value it stores is the serial,
+ * and every map the serial then names is indexed by the serial.
+ *
+ * Living on the socket also means it is freed with the socket, so a released
+ * pipe cannot leave a stale pairing behind to misdeliver a later write.
+ */
 struct {
 	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
@@ -218,7 +237,7 @@ int splice_c2d(struct sk_msg_md *msg)
 	if (!info || !info->paired) {
 		return SK_PASS;
 	}
-	return bpf_msg_redirect_map(msg, &dpipe_map, info->peer_key, BPF_F_INGRESS);
+	return bpf_msg_redirect_map(msg, &dpipe_map, info->key, BPF_F_INGRESS);
 }
 
 /*
@@ -245,6 +264,6 @@ int splice_d2c(struct sk_msg_md *msg)
 	if (!info || !info->paired) {
 		return SK_PASS;
 	}
-	return bpf_msg_redirect_map(msg, &cpipe_map, info->peer_key,
+	return bpf_msg_redirect_map(msg, &cpipe_map, info->key,
 				    BPF_F_INGRESS);
 }

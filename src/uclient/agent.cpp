@@ -426,7 +426,18 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
 			/* Read-through: hand the response to the daemon so the
 			 * next caller hits. Needs its own dpipe -- the one used
 			 * for the lookup went back on the freelist when the
-			 * verdict arrived. */
+			 * verdict arrived.
+			 *
+			 * Best effort, deliberately. This posts and returns;
+			 * the daemon parses and stores on its own thread. A
+			 * query issued in the moment before that finishes sees
+			 * no payload and reads through again, which costs a
+			 * round trip and stores the same rows twice. Waiting
+			 * for the store to land would fix that by blocking the
+			 * application inside SSL_read, which is the one thing
+			 * this design will not do. The cache is allowed to be
+			 * slightly behind; it is not allowed to be in the way.
+			 */
 			uint32_t key = 0;
 
 			if (qcagent::acquire(c.pending, c.sock, key)) {

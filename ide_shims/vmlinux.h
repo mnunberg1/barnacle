@@ -57,6 +57,8 @@ struct bpf_sock_ops {
 
 /* sk_msg context. data/data_end bracket the readable window, which only
  * covers what bpf_msg_pull_data() has pulled in. */
+struct bpf_sock;
+
 struct sk_msg_md {
 	void *data;
 	void *data_end;
@@ -66,6 +68,16 @@ struct sk_msg_md {
 	__u32 remote_port;
 	__u32 local_port;
 	__u32 size;
+	/* The socket this message is being sent on. Reaching sk_storage
+	 * through it is how a socket names its own splice peer, rather than
+	 * being looked up by a key computed from outside. */
+	struct bpf_sock *sk;
+};
+
+/* One word in the real thing too. Embedded in a map value to serialise
+ * writers; the verifier enforces the locking rules around it. */
+struct bpf_spin_lock {
+	__u32 val;
 };
 
 struct __sk_buff {

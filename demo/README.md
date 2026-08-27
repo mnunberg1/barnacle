@@ -37,7 +37,8 @@ docker compose -f demo/docker-compose.yml exec bpf make
 ```
 
 `make check` runs the tests that need no kernel or root; `make test` also
-runs the privileged ones (sockmap attach, bpftime shared memory). See the
+runs the privileged ones (kernel feature probes, cross-process sockmap
+redirect). See the
 [Makefile](../Makefile) for details.
 
 ## Run the demo workload
@@ -49,6 +50,32 @@ docker compose -f demo/docker-compose.yml exec bpf python3 demo/workload.py
 The `bpf` container already has `MYSQL_HOST`/`MYSQL_PORT`/`VALKEY_HOST`/etc.
 set to point at the compose services, so `workload.py` needs no flags. It
 prints each query it issues, how long it took, and the shape of the result.
+
+## Run the daemon and UCLIENT
+
+The daemon owns the shared state: it loads KCLIENT, creates the maps and the
+arena, builds the dpipe pool, and seeds the statement table from the list.
+
+```bash
+docker compose -f demo/docker-compose.yml exec bpf ./build/agent -l demo/config/cache.list -v
+```
+
+UCLIENT is a shared library that Frida injects into a client process that is
+already running and serving. Nothing is preloaded and the client is not
+restarted -- that is the whole point of injecting rather than `LD_PRELOAD`:
+
+```bash
+docker compose -f demo/docker-compose.yml exec bpf ./build/qcinject <PID>
+```
+
+The agent picks up the same statement list through the daemon's pinned maps,
+so it needs no list of its own. It prints its counters on exit (`writes`,
+`matched`, `asked`, `served`, `resent`, `published`, `timeouts`), which is the
+quickest way to see whether statements are being recognised and answered.
+
+The injected library must match the target's glibc. The agent links
+libstdc++ statically, but a build against a newer glibc than the target
+container's will fail to load -- see the note in the [Makefile](../Makefile).
 
 ## Run qcache against the demo
 

@@ -31,7 +31,7 @@ __u64 __shim_pt_regs_param(const struct pt_regs *ctx, int n);
  * The real BPF_UPROBE/BPF_URETPROBE macros generate a wrapper that unpacks
  * pt_regs into named arguments. This project does not use them -- the probes
  * take `struct pt_regs *ctx` directly and call PT_REGS_PARM* by hand, because
- * bpftime's own working examples do it that way and the macro form did not
+ * the plain form is what the working examples use, and the macro form did not
  * fire. Kept only so the names resolve if someone reaches for them.
  */
 #define BPF_UPROBE(name, args...) name(struct pt_regs *ctx)

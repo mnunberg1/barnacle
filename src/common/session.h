@@ -31,6 +31,67 @@
 
 namespace cache {
 
+/*
+ * The request side: plaintext bytes handed to SSL_write, reassembled into
+ * commands.
+ *
+ * Aggregation is not optional. A single SSL_write does not necessarily carry
+ * a whole packet, and a single packet does not necessarily arrive in one
+ * call, so a matcher that looked at each buffer in isolation would miss
+ * statements split across writes and mis-read ones that share a buffer.
+ *
+ * Every command is consumed, not just the interesting ones. MySQL is a strict
+ * request/response protocol with no pipelining, so a packet skipped rather
+ * than parsed leaves the reader misaligned for everything after it -- the
+ * next "statement" would be read from the middle of the previous one.
+ */
+class RequestTracker {
+public:
+	/* `caps` must be the negotiated set. CLIENT_QUERY_ATTRIBUTES changes
+	 * where the statement text begins, so guessing gets it wrong on MySQL
+	 * 8.0.26 and later. */
+	void begin(uint32_t caps);
+
+	/* Feed plaintext from one SSL_write. Returns true when a complete
+	 * COM_QUERY has been assembled, with its text in `out`.
+	 *
+	 * Call repeatedly until it returns false: one buffer can hold more
+	 * than one command. */
+	bool feed(const uint8_t *data, size_t len, std::string &out);
+
+	/* Continue draining without adding bytes -- the same as feed() with an
+	 * empty buffer, spelled so callers do not have to pass nullptr. */
+	bool next(std::string &out);
+
+	/* The command byte of the last complete packet seen, COM_QUERY or not.
+	 * Useful for noticing COM_QUIT and COM_STMT_PREPARE. */
+	uint8_t lastCommand() const
+	{
+		return last_cmd;
+	}
+
+	/* Sequence id of that packet. A response continues the numbering of
+	 * the command it answers, and the counter restarts per command -- so a
+	 * cached response has to be renumbered for whoever is replaying it. */
+	uint8_t lastSeq() const
+	{
+		return last_seq;
+	}
+
+	size_t buffered() const
+	{
+		return reader.buffered();
+	}
+
+	void reset();
+
+private:
+	mysql::MessageReader reader;
+	uint32_t caps = 0;
+	uint8_t last_cmd = 0;
+	uint8_t last_seq = 0;
+};
+
 class ResponseTracker {
 public:
 	void begin(uint32_t caps);

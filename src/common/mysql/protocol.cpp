@@ -464,6 +464,18 @@ bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out)
 	return true;
 }
 
+bool parseEof(const uint8_t *data, size_t len, EofPacket &out)
+{
+	/* Exactly five bytes, always: header, warnings, status. There is no
+	 * capability-dependent tail the way an OK packet has. */
+	if (len < 5 || data[0] != 0xFE) {
+		return false;
+	}
+	out.warnings = readU16(data + 1);
+	out.status_flags = readU16(data + 3);
+	return true;
+}
+
 bool parseErr(const uint8_t *data, size_t len, uint32_t caps, ErrPacket &out)
 {
 	size_t pos = 0;

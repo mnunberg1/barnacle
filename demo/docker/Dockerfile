@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         python3-venv \
         python3-dev \
+        xz-utils \
+        libgtest-dev \
+        libgmock-dev \
         default-mysql-client \
         libmariadb-dev \
         redis-tools \
@@ -29,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
         less \
         ca-certificates \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian marks the system Python as externally managed, so the demo helpers
@@ -40,6 +44,20 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # extensions (mysqlclient) are both observable and both worth demonstrating.
 RUN pip install --no-cache-dir PyMySQL==1.1.1 redis==5.2.1 \
         mysqlclient==2.2.8 Flask==3.1.0
+
+# Frida devkits: a static lib and a header, no build step. Used for the
+# userspace agent and its injector. eBPF covers the kernel side only.
+ARG FRIDA_VERSION=17.2.11
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in arm64) fa=arm64 ;; amd64) fa=x86_64 ;; *) echo "unsupported $arch" >&2; exit 1 ;; esac; \
+    mkdir -p /opt/frida; \
+    for kit in gum core; do \
+        url="https://github.com/frida/frida/releases/download/${FRIDA_VERSION}/frida-${kit}-devkit-${FRIDA_VERSION}-linux-${fa}.tar.xz"; \
+        curl -fsSL "$url" -o /tmp/frida.tar.xz; \
+        tar -xJf /tmp/frida.tar.xz -C /opt/frida; \
+        rm -f /tmp/frida.tar.xz; \
+    done
 
 WORKDIR /workspace
 CMD ["sleep", "infinity"]

@@ -12,10 +12,10 @@ deliberately expensive via SLEEP(), standing in for the kind of slow query a
 real app would have (an unindexed scan, a slow join) without needing a large
 dataset to reproduce reliably. All templates return the same column shape
 whether they are the fast or slow variant, so results can be fetched
-generically -- except once a statement is added to the reroute list, at which
-point mysqld starts returning `SELECT 0`'s single column instead. That is not
-a bug to work around here: it is the whole point of the demo, so this script
-just logs the shape change rather than crashing on it.
+generically -- and a cached answer keeps that shape too, since the daemon
+stores the result set and regenerates the packets rather than replaying
+whatever bytes it captured. A hit is meant to be indistinguishable from a
+miss apart from how long it took, which is what this script measures.
 """
 
 from __future__ import annotations
@@ -30,8 +30,7 @@ import MySQLdb
 from MySQLdb import Error as MySQLError
 
 # Weighted so slow queries show up often enough to be interesting quickly
-# without dominating the feed -- see app/dashboard.py, which is what turns
-# these numbers into something to look at.
+# without dominating the feed.
 QUERY_TEMPLATES = [
 	(3, "SELECT * FROM products WHERE category = 'tools'"),
 	(3, "SELECT name, price FROM products WHERE stock = 0"),

@@ -57,8 +57,9 @@ struct Target {
 struct Config {
 	std::vector<Target> targets;
 
-	/* Where the agent listens, and where the cache lives. */
-	std::string control_path = "/tmp/qcache.sock";
+	/* Where the remote cache lives. There is no control socket: the daemon
+	 * and the clients meet in shared BPF maps and the arena, never on a
+	 * filesystem rendezvous. */
 	std::string valkey_host = "valkey";
 	uint16_t valkey_port = 6379;
 

@@ -4,7 +4,7 @@
  *
  * Worth knowing when reading the sockmap code: these operate on 32-bit
  * quantities, so bpf_htonl(3306) is 0xEA0C0000 -- NOT the 0x0000EA0C you get
- * from a 16-bit sockaddr_in::sin_port. Mixing the two produces sock_keys that
+ * from a 16-bit sockaddr_in::sin_port. Mixing the two produces keys that
  * never match and a redirect that silently does nothing.
  */
 #ifndef VALKEY_QCACHE_SHIM_BPF_ENDIAN_H

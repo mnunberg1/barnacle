@@ -10,16 +10,20 @@
 #
 #   qcache    entry point. Runs on the host, finds target programs inside
 #             containers via /proc, decides whether each is attachable.
-#   agent     userspace daemon: agent_pipe pool, cache, mini-protocol.
+#   agent     userspace daemon: dpipe pool, cache, mini-protocol. Owns the
+#             shared state, which lives in kernel BPF maps and arenas.
 #   kclient   kernel eBPF: sockops classifier + sk_msg redirect.
-#   uclient   bpftime probes injected into target processes.
+#   uclient   a native agent Frida injects into target processes. Ordinary
+#             C++: it maps the arena, parses MySQL with src/common, and holds
+#             per-connection state. eBPF is used only where code must run in
+#             the kernel, which here means kclient alone.
 #   common    MySQL protocol, Valkey client, session tracking.
 
 CLANG    ?= clang
 BPFTOOL  ?= bpftool
 CXX      ?= g++
 CC       ?= gcc
-CXXFLAGS ?= -g -O2 -Wall -Wextra -std=c++17
+CXXFLAGS ?= -g -O2 -Wall -Wextra -std=c++20
 CFLAGS   ?= -g -O2 -Wall
 
 OUT     := build
@@ -29,30 +33,14 @@ VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
 
 BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -Wall -I$(OUT) -Isrc
 
-# bpftime is built from source; these come from its build tree. `make
-# bpftime-paths` prints what was detected.
-BPFTIME_DIR ?= /tmp/bpftime
-BPFTIME_INC := -I$(BPFTIME_DIR)/vm/include -I$(BPFTIME_DIR)/runtime/include \
-               -I$(BPFTIME_DIR)/runtime -I$(BPFTIME_DIR)/build/runtime \
-               -I$(BPFTIME_DIR)/third_party -I$(BPFTIME_DIR)/third_party/spdlog/include \
-               -I$(BPFTIME_DIR)/build/libbpf/uapi -I$(BPFTIME_DIR)/build/libbpf \
-               -I$(BPFTIME_DIR)/build/FridaGum-prefix/src/FridaGum \
-               -I$(BPFTIME_DIR)/runtime/src -I$(BPFTIME_DIR)/vm/vm-core/include \
-               -I$(BPFTIME_DIR)/vm/compat/include -I$(BPFTIME_DIR)/attach/base_attach_impl
-BPFTIME_LIBS := $(BPFTIME_DIR)/build/runtime/libruntime.a \
-                $(BPFTIME_DIR)/build/vm/vm-core/libbpftime_vm.a \
-                $(BPFTIME_DIR)/build/vm/compat/llvm-vm/libllvmbpf_vm.a \
-                $(BPFTIME_DIR)/build/vm/compat/llvm-vm/libbpftime_llvm_vm.a \
-                $(BPFTIME_DIR)/build/third_party/spdlog/libspdlog.a \
-                $(BPFTIME_DIR)/build/libbpf/libbpf.a
-LLVM_LIBS := $(shell llvm-config-18 --libs --system-libs 2>/dev/null || echo -lLLVM-18)
+
 
 COMMON_SRC := src/common/mysql/protocol.cpp src/common/valkey.cpp src/common/session.cpp
 
-.PHONY: all clean check test bpftime-paths
+.PHONY: all clean check test frida-paths
 
-all: $(OUT)/qcache $(OUT)/agent $(OUT)/kclient.bpf.o $(OUT)/uclient.bpf.o \
-     $(OUT)/uclient_loader $(OUT)/test_protocol
+all: $(OUT)/qcache $(OUT)/agent $(OUT)/kclient.bpf.o \
+     $(OUT)/libqcagent.so $(OUT)/qcinject
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -64,73 +52,151 @@ $(OUT)/vmlinux.h: | $(OUT)
 
 # --- kclient: kernel eBPF -------------------------------------------------
 
-$(OUT)/kclient.bpf.o: src/kclient/kclient.bpf.c src/kclient/kclient.h $(OUT)/vmlinux.h
-	$(CLANG) $(BPF_CFLAGS) -Isrc/kclient -c $< -o $@
+$(OUT)/kclient.bpf.o: src/kclient/kclient.bpf.c src/common/defs.h $(OUT)/vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
 $(OUT)/kclient.skel.h: $(OUT)/kclient.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-# --- uclient: bpftime probes ---------------------------------------------
+# --- uclient: a native agent, injected by Frida ---------------------------
+#
+# NOT eBPF. eBPF is used only where code must run in the kernel, which in this
+# project means kclient alone. In a client process the BPF model bought
+# nothing and cost a lot: no per-process state (a BPF "global" is a .bss map
+# in one shared segment, so two clients share it), no mmap (a program cannot
+# make syscalls, so the arena was unreachable), verifier bounds that forced a
+# 512-byte statement cap and a hand-rolled subset of MySQL framing, and no way
+# to call bpf() to splice a socket. As ordinary C++ all four simply go away.
+#
+# Frida is what bpftime used underneath for injection and hooking; this uses
+# it directly. `make frida-paths` prints what was detected.
+FRIDA_DIR ?= /opt/frida
+FRIDA_SYS := -lpthread -ldl -lm -lresolv
 
-$(OUT)/uclient.bpf.o: src/uclient/uclient.bpf.c $(OUT)/vmlinux.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+# shared.cpp is compiled separately on purpose: frida-gum.h and libbpf's
+# bpf.h both declare bpf_insn, as an enum and a struct respectively, so they
+# cannot appear in one translation unit.
+$(OUT)/qcagent_shared.o: src/uclient/shared.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -fPIC -Isrc -c $< -o $@
 
-$(OUT)/uclient.skel.h: $(OUT)/uclient.bpf.o
-	$(BPFTOOL) gen skeleton $< > $@
+$(OUT)/qcagent_bpfsys.o: src/uclient/bpfsys.c | $(OUT)
+	$(CC) $(CFLAGS) -fPIC -Isrc -c $< -o $@
 
-# Static libbpf: elf_find_func_offset_from_file is internal and is not
-# exported from the shared library, but the override attach path needs it.
-$(OUT)/uclient_loader: src/uclient/loader.c $(OUT)/uclient.skel.h
-	$(CC) $(CFLAGS) -I$(OUT) -Isrc/uclient $< -o $@ \
-	  /usr/lib/$(UNAME_M)-linux-gnu/libbpf.a -lelf -lz -lpthread
+# Everything static except libc.
+#
+# The agent is dlopen'd inside a process we do not control, which may be in
+# another container with a completely different filesystem. Any shared
+# dependency has to exist in THAT mount namespace, and libbpf almost never
+# does -- injection fails with "libbpf.so.1: cannot open shared object file"
+# before a single hook is installed. Linking it in makes the agent portable to
+# any target the injector can reach.
+LIBDIR := /usr/lib/$(UNAME_M)-linux-gnu
+
+# -Wl,--no-undefined because a shared object happily links with symbols it
+# never resolves, and the failure then lands at dlopen time inside somebody
+# else's process -- as "undefined symbol" from a library that has already
+# replaced their SSL_read. Refuse it here instead.
+$(OUT)/libqcagent.so: src/uclient/agent.cpp $(OUT)/qcagent_shared.o \
+                      $(OUT)/qcagent_bpfsys.o \
+                      src/common/session.cpp src/common/stmtlist.cpp \
+                      src/common/mysql/resultset.cpp \
+                      src/common/mysql/protocol.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -fPIC -shared -Isrc -I$(FRIDA_DIR) $^ -o $@ \
+	  -Wl,--no-undefined \
+	  $(FRIDA_DIR)/libfrida-gum.a \
+	  -static-libstdc++ -static-libgcc $(FRIDA_SYS)
+
+$(OUT)/qcinject: src/uclient/inject.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -Isrc -I$(FRIDA_DIR) $< -o $@ \
+	  $(FRIDA_DIR)/libfrida-core.a $(FRIDA_SYS)
+
+frida-paths:
+	@echo "FRIDA_DIR = $(FRIDA_DIR)"
+	@test -f $(FRIDA_DIR)/libfrida-gum.a && echo "  gum:  found" || echo "  gum:  MISSING"
+	@test -f $(FRIDA_DIR)/libfrida-core.a && echo "  core: found" || echo "  core: MISSING"
 
 # --- agent: the userspace daemon -----------------------------------------
-
-$(OUT)/agent: src/agent/main.cpp src/agent/pipes.cpp src/common/valkey.cpp \
+#
+# Owns everything shared: loads kclient, creates the maps and the arena,
+# builds the dpipe pool, answers requests.
+$(OUT)/agent: src/agent/main.cpp src/agent/arena.cpp src/agent/dpipes.cpp \
+              src/common/stmtlist.cpp src/common/valkey.cpp \
+              src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
               $(OUT)/kclient.skel.h
-	$(CXX) $(CXXFLAGS) -I$(OUT) -Isrc/kclient -Isrc/agent \
-	  src/agent/main.cpp src/agent/pipes.cpp src/common/valkey.cpp \
+	$(CXX) $(CXXFLAGS) -I$(OUT) -Isrc \
+	  src/agent/main.cpp src/agent/arena.cpp src/agent/dpipes.cpp \
+	  src/common/stmtlist.cpp src/common/valkey.cpp \
+	  src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
 	  -o $@ -lbpf -lelf -lz
 
 # --- qcache: the entry point ---------------------------------------------
 #
 # Deliberately depends on nothing but libstdc++: it runs on the host, where
-# libbpf and bpftime may not be installed at all, and its job is to report
-# what it finds rather than to load anything itself.
+# libbpf may not be installed at all, and its job is to report what it finds
+# rather than to load anything itself.
 $(OUT)/qcache: src/qcache/main.cpp src/qcache/config.cpp src/qcache/discover.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 # --- tests ----------------------------------------------------------------
 
+# GoogleTest for the userspace units. gtest_main supplies main(), so the
+# tests are just TEST() blocks.
+GTEST_LIBS := -lgtest -lgtest_main -lpthread
+
 $(OUT)/test_protocol: tests/test_protocol.cpp src/common/mysql/protocol.cpp | $(OUT)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
 
-$(OUT)/test_pipes: tests/test_pipes.cpp src/agent/pipes.cpp $(OUT)/kclient.skel.h
-	$(CXX) $(CXXFLAGS) -I$(OUT) -Isrc/kclient -Isrc/agent \
-	  tests/test_pipes.cpp src/agent/pipes.cpp -o $@ -lbpf -lelf -lz
+$(OUT)/test_session: tests/test_session.cpp src/common/session.cpp \
+                     src/common/mysql/protocol.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
 
-$(OUT)/test_redirect: tests/test_redirect.c $(OUT)/kclient.skel.h
-	$(CC) $(CFLAGS) -I$(OUT) -Isrc/kclient $< -o $@ -lbpf -lelf -lz
+$(OUT)/test_resultset: tests/test_resultset.cpp src/common/mysql/resultset.cpp \
+                       src/common/mysql/protocol.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
 
-$(OUT)/test_shm_bridge: tests/test_shm_bridge.cpp src/agent/shm_bridge.cpp
-	$(CXX) $(CXXFLAGS) -Isrc/agent $(BPFTIME_INC) $^ -o $@ \
-	  -Wl,--start-group $(BPFTIME_LIBS) -Wl,--end-group \
-	  $(LLVM_LIBS) -lpthread -ldl -lelf -lz
+$(OUT)/test_request: tests/test_request.cpp src/common/session.cpp \
+                     src/common/stmtlist.cpp src/common/mysql/protocol.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
+
+# The gate for the whole redirect design: can we reach a socket owned by
+# another process? Re-execs itself as the child, so it must be one binary.
+$(OUT)/test_xproc: tests/test_xproc.c $(OUT)/kclient.skel.h
+	$(CC) $(CFLAGS) -I$(OUT) -Isrc $< -o $@ -lbpf -lelf -lz
+
+# Which kernel features are actually available here. Loads programs and
+# creates maps without attaching anything, so it is safe to run anywhere and
+# tells us up front whether the arena memory model and the LRU timer sweeper
+# are reachable on this kernel.
+$(OUT)/test_caps: tests/test_caps.c | $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -lbpf -lelf -lz
 
 # Needs neither kernel nor root -- the practical benefit of keeping protocol
 # parsing in userspace.
-check: $(OUT)/test_protocol
+check: $(OUT)/test_protocol $(OUT)/test_session $(OUT)/test_request \
+       $(OUT)/test_resultset
 	./$(OUT)/test_protocol
+	./$(OUT)/test_session
+	./$(OUT)/test_request
+	./$(OUT)/test_resultset
 
-# Privileged: sockmap attach and bpftime shared memory.
-test: check $(OUT)/test_redirect $(OUT)/test_pipes
-	./$(OUT)/test_redirect
-	./$(OUT)/test_pipes
+# Privileged: sockmap attach and kernel feature probes.
+#
+# test_xproc runs three ways deliberately. --no-sockops is the control: if it
+# passes while the default fails, the fault is in classify() or the cgroup
+# attach rather than in the redirect. --socketpair answers whether
+# architecture.txt's socketpair(2) can back a dpipe at all, and is expected to
+# fail -- so it is reported, not asserted.
+test: check $(OUT)/test_caps $(OUT)/test_xproc
+	./$(OUT)/test_caps
+	./$(OUT)/test_xproc --in-proc
+	./$(OUT)/test_xproc
+	-./$(OUT)/test_xproc --socketpair
 
-bpftime-paths:
-	@echo "BPFTIME_DIR = $(BPFTIME_DIR)"
-	@test -d $(BPFTIME_DIR)/build && echo "  build tree: found" || \
-	  echo "  build tree: MISSING (build bpftime first)"
+# Everything the tree still knows how to build.
+clean-stale:
+	rm -f $(OUT)/uclient.bpf.o $(OUT)/uclient.skel.h $(OUT)/uclient_loader \
+	      $(OUT)/test_pipes $(OUT)/test_redirect $(OUT)/test_shm_bridge \
+	      $(OUT)/qcdemo $(OUT)/test_daemon
 
 clean:
 	rm -rf $(OUT)

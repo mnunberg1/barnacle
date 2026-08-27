@@ -3,8 +3,8 @@
 #
 # On Linux with a BPF toolchain, use the Makefile. Off Linux, this configures
 # every source against ide_shims/ so an editor can parse and navigate the
-# whole tree -- including the eBPF programs and the parts that use libbpf and
-# bpftime, none of which exist on a workstation.
+# whole tree -- including the eBPF program and the parts that use libbpf,
+# neither of which exists on a workstation.
 #
 # Nothing built off Linux is runnable. The shims declare signatures with no
 # definitions, so targets are syntax-only there; that is deliberate, since a
@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.16)
 project(valkey_qcache C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -37,14 +37,47 @@ add_executable(qcache
     src/qcache/discover.cpp)
 target_include_directories(qcache PRIVATE src/qcache)
 
-add_library(qcache_mysql STATIC src/common/mysql/protocol.cpp)
-target_include_directories(qcache_mysql PUBLIC src/common)
+# Includes are written relative to the source root, so that is what goes on
+# the path -- PUBLIC, since every test below includes these headers the same
+# way the sources do.
+add_library(qcache_mysql STATIC
+    src/common/mysql/protocol.cpp
+    src/common/mysql/resultset.cpp)
+target_include_directories(qcache_mysql PUBLIC src)
 
-add_executable(test_protocol tests/test_protocol.cpp)
-target_link_libraries(test_protocol PRIVATE qcache_mysql)
-
+# GoogleTest drives the userspace units. It is usually absent on a
+# workstation, so the tests are optional here -- the point of this file off
+# Linux is that everything PARSES, and the Makefile is what actually runs
+# them in the container.
 enable_testing()
-add_test(NAME protocol COMMAND test_protocol)
+find_package(GTest QUIET)
+if(GTest_FOUND)
+    add_executable(test_protocol tests/test_protocol.cpp)
+    target_link_libraries(test_protocol PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    add_test(NAME protocol COMMAND test_protocol)
+
+    add_executable(test_session tests/test_session.cpp src/common/session.cpp)
+    target_include_directories(test_session PRIVATE src)
+    target_link_libraries(test_session PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    add_test(NAME session COMMAND test_session)
+
+    add_executable(test_request tests/test_request.cpp src/common/session.cpp
+        src/common/stmtlist.cpp)
+    # test_request reaches defs.h, which reaches <linux/bpf.h>. Off Linux
+    # that comes from the shims, the same way the eBPF targets get it.
+    target_include_directories(test_request PRIVATE src)
+    if(NOT ON_LINUX)
+        target_include_directories(test_request PRIVATE ${SHIMS})
+    endif()
+    target_link_libraries(test_request PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    add_test(NAME request COMMAND test_request)
+
+    add_executable(test_resultset tests/test_resultset.cpp)
+    target_link_libraries(test_resultset PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    add_test(NAME resultset COMMAND test_resultset)
+else()
+    message(STATUS "valkey-qcache: GoogleTest not found -- unit tests not configured")
+endif()
 
 # --- everything else: real on Linux, shimmed elsewhere -------------------
 
@@ -57,36 +90,29 @@ function(add_shimmed_target name)
         src src/kclient src/agent src/uclient src/common)
     if(NOT ON_LINUX)
         target_include_directories(${name} BEFORE PRIVATE ${SHIMS})
-        # Cosmetic on this path: macOS deprecates syscall(2), which
-        # attach_override.h calls.
-        target_compile_options(${name} PRIVATE -Wno-deprecated-declarations)
     endif()
     set_target_properties(${name} PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endfunction()
 
 add_shimmed_target(agent_objs
     src/agent/main.cpp
-    src/agent/pipes.cpp
+    src/agent/arena.cpp
+    src/agent/dpipes.cpp
+    src/common/stmtlist.cpp
     src/common/valkey.cpp)
-
-add_shimmed_target(shm_bridge_objs src/agent/shm_bridge.cpp)
-if(NOT ON_LINUX)
-    # The real header lives in bpftime's source tree; ide_shims provides a
-    # stand-in so this parses.
-    target_include_directories(shm_bridge_objs BEFORE PRIVATE ${SHIMS})
-endif()
 
 add_shimmed_target(session_objs src/common/session.cpp)
 
-# The eBPF programs. Compiled for the BPF target by the Makefile; here they
-# are only ever parsed, which is still worth having -- these are the files
-# where a typo costs the most time to find.
+# The eBPF program. Compiled for the BPF target by the Makefile; here it is
+# only ever parsed, which is still worth having -- this is the file where a
+# typo costs the most time to find. kclient is the ONLY eBPF in the project:
+# userspace interception is a Frida agent, not a BPF program.
 add_shimmed_target(kclient_bpf src/kclient/kclient.bpf.c)
-add_shimmed_target(uclient_bpf src/uclient/uclient.bpf.c)
 
-add_shimmed_target(uclient_loader_objs src/uclient/loader.c)
+# uclient is ordinary C++ now. It needs frida-gum, which is not on a
+# workstation, so only the half that does not touch Frida is parsed here.
+add_shimmed_target(uclient_objs src/uclient/shared.cpp)
 
 add_shimmed_target(privileged_tests
-    tests/test_pipes.cpp
-    tests/test_redirect.c
-    tests/test_shm_bridge.cpp)
+    tests/test_caps.c
+    tests/test_xproc.c)

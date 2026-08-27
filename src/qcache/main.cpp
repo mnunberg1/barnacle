@@ -13,8 +13,9 @@
  *             queue, which is what wakes a client parked in epoll_wait().
  *   agent     userspace daemon. Owns the agent_pipe pool, the cache, and the
  *             mini-protocol.
- *   uclient   bpftime probes injected into each target process, hooking the
- *             TLS library's read/write entry points on the plaintext side.
+ *   uclient   a native agent injected into each target process by Frida,
+ *             hooking the TLS library's read/write entry points on the
+ *             plaintext side. Not eBPF -- see src/uclient/agent.cpp.
  *
  * Why discovery is a first-class step rather than a `--pid` flag: attaching
  * is only useful when several things line up, and each of them has silently
@@ -45,8 +46,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
-
-using namespace qcache;
 
 namespace {
 
@@ -89,47 +88,47 @@ void printHeader()
 
 /* Explain a verdict in terms of what to do about it. A bare enum name is not
  * actionable; these are the four things that actually go wrong. */
-void explain(const Process &p)
+void explain(const qcache::Process &p)
 {
 	switch (p.verdict) {
-	case Verdict::Attachable:
+	case qcache::Verdict::Attachable:
 		printf("      ready: %s, %d connection(s) to port %u\n",
 		       p.libssl_path.c_str(), p.db_connections,
 		       p.target ? p.target->mysql_port : 0);
 		break;
-	case Verdict::NoTlsLibrary:
+	case qcache::Verdict::NoTlsLibrary:
 		printf("      no TLS library mapped yet. Usually means the process has\n"
 		       "      not opened a connection -- libssl is normally dlopen'd on\n"
 		       "      first use. Re-run once it has connected.\n");
 		break;
-	case Verdict::UnsupportedTls:
+	case qcache::Verdict::UnsupportedTls:
 		printf("      uses %s (%s), which has no OpenSSL entry points to hook.\n"
 		       "      Go and Java do TLS in-process and are out of scope.\n",
-		       tlsKindName(p.tls), p.libssl_path.c_str());
+		       qcache::tlsKindName(p.tls), p.libssl_path.c_str());
 		break;
-	case Verdict::NoSslSymbols:
+	case qcache::Verdict::NoSslSymbols:
 		printf("      %s is mapped but exports neither SSL_read/SSL_write nor\n"
 		       "      the _ex variants -- likely stripped or statically linked.\n",
 		       p.libssl_path.c_str());
 		break;
-	case Verdict::NoDatabaseConn:
+	case qcache::Verdict::NoDatabaseConn:
 		printf("      attachable, but no established connection to port %u.\n"
 		       "      Nothing to cache until it talks to the database.\n",
 		       p.target ? p.target->mysql_port : 0);
 		break;
-	case Verdict::AlreadyAttached:
+	case qcache::Verdict::AlreadyAttached:
 		printf("      uclient is already attached.\n");
 		break;
 	}
 }
 
-/* Shell out to `bpftime attach <pid>`.
+/* Shell out to `qcinject <pid>`.
  *
- * A subprocess rather than a library call because bpftime's injection has to
- * happen from a separate process image -- it maps its agent into the target,
- * and doing that from inside our own address space is not the supported path.
+ * A subprocess rather than a library call because injection maps our agent
+ * into the target, and doing that from inside our own address space is not
+ * the supported path.
  */
-bool attachOne(const Process &p, bool dry_run, bool verbose)
+bool attachOne(const qcache::Process &p, bool dry_run, bool verbose)
 {
 	if (dry_run) {
 		printf("      [dry-run] would attach uclient to pid %d\n", p.pid);
@@ -154,7 +153,7 @@ bool attachOne(const Process &p, bool dry_run, bool verbose)
 				dup2(devnull, STDERR_FILENO);
 			}
 		}
-		execlp("bpftime", "bpftime", "attach", pidbuf, (char *)nullptr);
+		execlp("qcinject", "qcinject", pidbuf, (char *)nullptr);
 		_exit(127);
 	}
 
@@ -166,7 +165,7 @@ bool attachOne(const Process &p, bool dry_run, bool verbose)
 		return true;
 	}
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
-		fprintf(stderr, "      bpftime not on PATH (try /root/.bpftime)\n");
+		fprintf(stderr, "      qcinject not on PATH (try ./build)\n");
 	} else {
 		fprintf(stderr, "      attach failed for pid %d\n", p.pid);
 	}
@@ -205,10 +204,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	Config cfg;
+	qcache::Config cfg;
 	std::string err;
 
-	if (!Config::load(cfg_path, cfg, err)) {
+	if (!qcache::Config::load(cfg_path, cfg, err)) {
 		fprintf(stderr, "qcache: %s\n", err.c_str());
 		return 1;
 	}
@@ -217,14 +216,14 @@ int main(int argc, char **argv)
 			cfg_path.c_str());
 	}
 
-	std::vector<Process> found = discover(cfg, err);
+	std::vector<qcache::Process> found = qcache::discover(cfg, err);
 
 	if (!err.empty()) {
 		fprintf(stderr, "qcache: %s\n", err.c_str());
 		return 1;
 	}
 	for (auto &p : found) {
-		analyse(p);
+		qcache::analyse(p);
 	}
 
 	if (found.empty()) {
@@ -241,7 +240,7 @@ int main(int argc, char **argv)
 	if (cmd == "list" || cmd == "analyze") {
 		printHeader();
 		for (const auto &p : found) {
-			printf("%s\n", describe(p).c_str());
+			printf("%s\n", qcache::describe(p).c_str());
 			if (cmd == "analyze") {
 				explain(p);
 			}
@@ -254,8 +253,8 @@ int main(int argc, char **argv)
 
 		printHeader();
 		for (const auto &p : found) {
-			printf("%s\n", describe(p).c_str());
-			if (p.verdict != Verdict::Attachable) {
+			printf("%s\n", qcache::describe(p).c_str());
+			if (p.verdict != qcache::Verdict::Attachable) {
 				explain(p);
 				skipped++;
 				continue;
@@ -274,9 +273,8 @@ int main(int argc, char **argv)
 			}
 			signal(SIGINT, on_signal);
 			signal(SIGTERM, on_signal);
-			printf("\nagent would run here (control %s, cache %s:%u)\n",
-			       cfg.control_path.c_str(), cfg.valkey_host.c_str(),
-			       (unsigned)cfg.valkey_port);
+			printf("\nagent would run here (cache %s:%u)\n",
+			       cfg.valkey_host.c_str(), (unsigned)cfg.valkey_port);
 			while (!g_exiting) {
 				sleep(1);
 			}

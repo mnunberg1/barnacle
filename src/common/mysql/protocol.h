@@ -72,6 +72,10 @@ enum Command : uint8_t {
 	COM_QUIT = 0x01,
 	COM_INIT_DB = 0x02,
 	COM_QUERY = 0x03,
+	/* No payload beyond the command byte. Worth naming because it is the
+	 * clearest example of a packet that must be consumed rather than
+	 * skipped: ignoring its bytes would misalign everything after it. */
+	COM_PING = 0x0E,
 	COM_STMT_PREPARE = 0x16,
 	COM_STMT_EXECUTE = 0x17,
 	COM_STMT_CLOSE = 0x19,
@@ -196,6 +200,25 @@ struct OkPacket {
  * The status flags are the reason this matters: SERVER_STATUS_IN_TRANS
  * decides whether caching is permitted. */
 bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out);
+
+struct EofPacket {
+	uint16_t warnings = 0;
+	uint16_t status_flags = 0;
+};
+
+/*
+ * Parse a genuine EOF packet: 0xFE, warnings, status flags. Five bytes.
+ *
+ * This is NOT a short OK packet, and parseOk() cannot stand in for it. An OK
+ * puts two length-encoded integers where EOF puts its warning count, so the
+ * status flags land at the same offset by coincidence -- and parseOk() then
+ * fails on the trailing warnings field that an EOF does not have, discarding
+ * a status it had already read correctly. That silently lost
+ * SERVER_STATUS_IN_TRANS on every connection without CLIENT_DEPRECATE_EOF,
+ * which would have made responses produced inside a transaction look
+ * cacheable.
+ */
+bool parseEof(const uint8_t *data, size_t len, EofPacket &out);
 
 struct ErrPacket {
 	uint16_t error_code = 0;

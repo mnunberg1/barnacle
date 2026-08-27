@@ -24,6 +24,9 @@ extern "C" {
  * Portable C, so they are reused as-is. */
 #define __uint(name, val) int (*name)[val]
 #define __type(name, val) typeof(val) *name
+/* For attributes too large to encode as an array bound -- map_extra, which
+ * carries the arena's fixed virtual address. */
+#define __ulong(name, val) enum name##__##val { name##__value = val } name
 
 enum {
 	BPF_ANY = 0,
@@ -45,7 +48,23 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_PERCPU_ARRAY = 6,
 	BPF_MAP_TYPE_SOCKMAP = 15,
 	BPF_MAP_TYPE_SOCKHASH = 18,
+	BPF_MAP_TYPE_SK_STORAGE = 24,
 	BPF_MAP_TYPE_RINGBUF = 27,
+	BPF_MAP_TYPE_ARENA = 33,
+};
+
+/* Map creation flags this project uses. Real UAPI values. */
+enum {
+	BPF_F_NO_PREALLOC = (1U << 0),
+	BPF_F_MMAPABLE = (1U << 10),
+};
+
+/* libbpf pins the map under its own name in bpffs at load time, and reuses
+ * an existing pin if one is there. This is how the daemon and the client
+ * processes end up holding the same maps without passing descriptors. */
+enum libbpf_pin_type {
+	LIBBPF_PIN_NONE = 0,
+	LIBBPF_PIN_BY_NAME = 1,
 };
 
 /* --- map access --- */
@@ -69,6 +88,14 @@ long bpf_probe_write_user(void *unsafe_ptr, const void *src, __u32 size);
 /* --- sockmap --- */
 long bpf_sock_hash_update(struct bpf_sock_ops *skops, void *map, void *key, __u64 flags);
 long bpf_msg_redirect_hash(struct sk_msg_md *msg, void *map, void *key, __u64 flags);
+/* The index-keyed form, for a SOCKMAP rather than a SOCKHASH. */
+long bpf_msg_redirect_map(struct sk_msg_md *msg, void *map, __u32 key, __u64 flags);
+
+/* Per-socket storage, keyed by the socket itself rather than by anything
+ * derived from it. Freed with the socket, so it cannot outlive what it
+ * describes. */
+void *bpf_sk_storage_get(void *map, void *sk, void *value, __u64 flags);
+long bpf_sk_storage_delete(void *map, void *sk);
 long bpf_sk_redirect_hash(struct __sk_buff *skb, void *map, void *key, __u64 flags);
 long bpf_msg_pull_data(struct sk_msg_md *msg, __u32 start, __u32 end, __u64 flags);
 long bpf_msg_cork_bytes(struct sk_msg_md *msg, __u32 bytes);

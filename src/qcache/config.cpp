@@ -102,9 +102,7 @@ bool Config::load(const std::string &path, Config &out, std::string &err)
 		}
 
 		/* Everything else is global. */
-		if (key == "control_path") {
-			out.control_path = val;
-		} else if (key == "valkey_host") {
+		if (key == "valkey_host") {
 			out.valkey_host = val;
 		} else if (key == "valkey_port") {
 			out.valkey_port = (uint16_t)std::stoi(val);

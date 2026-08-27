@@ -1,5 +1,6 @@
 build/
 build-cmake/
+build-shim/
 cmake-build-*/
 .idea/cmake.xml
 __pycache__/

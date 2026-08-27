@@ -1,23 +1,25 @@
-# qcache - what to look for, and where.
+# qc-barnacle - what to look for, and where.
 #
 # Runs on the host; container processes are visible through /proc like any
 # others, so no container runtime is required.
 #
 # This file is deployment-specific: which processes to attach to, which
 # container they run in, and where Valkey lives all vary by machine. Copy
-# this to qcache.conf (gitignored) and fill in your own values rather than
+# this to barnacle.conf (gitignored) and fill in your own values rather than
 # editing this template in place.
 #
-#   cp config/qcache.conf.example config/qcache.conf
+#   cp config/barnacle.conf.example config/barnacle.conf
 #
 # For a config that works out of the box against the bundled demo
-# environment, see demo/config/qcache.conf instead.
+# environment, see demo/config/barnacle.conf instead.
 
 valkey_host  = 127.0.0.1
 valkey_port  = 6379
 
-# Every matcher is a case-insensitive substring; a target with no matchers at
-# all is rejected, since it would match every process on the host.
+# `comm` is matched exactly (case-insensitively) because it is a short fixed
+# name -- `mysql` must not also match `mysqld`. `cmdline` and `container` are
+# case-insensitive substrings. A target with no matchers at all is rejected,
+# since it would match every process on the host.
 [target my-app]
 comm       = python3
 cmdline    = my_app.py

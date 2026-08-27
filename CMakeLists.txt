@@ -31,12 +31,6 @@ endif()
 
 # --- always native: no Linux-only headers involved -----------------------
 
-add_executable(qcache
-    src/qcache/main.cpp
-    src/qcache/config.cpp
-    src/qcache/discover.cpp)
-target_include_directories(qcache PRIVATE src/qcache)
-
 # Includes are written relative to the source root, so that is what goes on
 # the path -- PUBLIC, since every test below includes these headers the same
 # way the sources do.
@@ -87,17 +81,17 @@ endif()
 function(add_shimmed_target name)
     add_library(${name} OBJECT ${ARGN})
     target_include_directories(${name} PRIVATE
-        src src/kclient src/agent src/uclient src/common)
+        src src/kclient src/daemon src/uclient src/common)
     if(NOT ON_LINUX)
         target_include_directories(${name} BEFORE PRIVATE ${SHIMS})
     endif()
     set_target_properties(${name} PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endfunction()
 
-add_shimmed_target(agent_objs
-    src/agent/main.cpp
-    src/agent/arena.cpp
-    src/agent/dpipes.cpp
+add_shimmed_target(daemon_objs
+    src/daemon/main.cpp
+    src/daemon/arena.cpp
+    src/daemon/dpipes.cpp
     src/common/stmtlist.cpp
     src/common/valkey.cpp)
 

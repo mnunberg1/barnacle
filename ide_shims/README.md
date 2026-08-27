@@ -48,13 +48,13 @@ Three things are worth stating because they are easy to get wrong:
 
 ## What does not need shimming
 
-`src/qcache/`, `src/common/mysql/`, `src/common/valkey.cpp` and
-`src/common/session.cpp` are ordinary POSIX C++ and compile natively on
-macOS. `qcache` in particular is dependency-free by design, since it runs on
-a host where libbpf may not be installed at all.
+`src/common/mysql/`, `src/common/valkey.cpp` and `src/common/session.cpp` are
+ordinary POSIX C++ and compile natively on macOS. `src/barnacle/` needs
+nothing at all: it is Python, and runs on a host where neither libbpf nor a
+C++ toolchain may be installed.
 
 ## Use
 
 CMake wires this up automatically off Linux; see `CMakeLists.txt`. By hand:
 
-    c++ -std=c++20 -fsyntax-only -Iide_shims -Isrc src/agent/dpipes.cpp
+    c++ -std=c++20 -fsyntax-only -Iide_shims -Isrc src/daemon/dpipes.cpp

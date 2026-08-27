@@ -8,15 +8,19 @@
 #
 # Components:
 #
-#   qcache    entry point. Runs on the host, finds target programs inside
-#             containers via /proc, decides whether each is attachable.
-#   agent     userspace daemon: dpipe pool, cache, mini-protocol. Owns the
-#             shared state, which lives in kernel BPF maps and arenas.
-#   kclient   kernel eBPF: sockops classifier + sk_msg redirect.
-#   uclient   a native agent Frida injects into target processes. Ordinary
-#             C++: it maps the arena, parses MySQL with src/common, and holds
-#             per-connection state. eBPF is used only where code must run in
-#             the kernel, which here means kclient alone.
+#   barnacle  entry point (qc-barnacle). Runs on the host, finds target
+#             programs inside containers via /proc, decides whether each is
+#             attachable, and injects the agent. Python: it reads /proc and
+#             runs a subprocess, and must work on a host with no toolchain.
+#   daemon    the userspace daemon (qc-daemon): dpipe pool, cache,
+#             mini-protocol. Owns the shared state, which lives in kernel BPF
+#             maps and arenas.
+#   kclient   kernel eBPF: the two sk_msg redirect programs.
+#   uclient   the agent Frida injects into target processes (libqcagent.so),
+#             plus the injector (qc-inject). Ordinary C++: it maps the arena,
+#             parses MySQL with src/common, and holds per-connection state.
+#             eBPF is used only where code must run in the kernel, which here
+#             means kclient alone.
 #   common    MySQL protocol, Valkey client, session tracking.
 
 CLANG    ?= clang
@@ -39,8 +43,8 @@ COMMON_SRC := src/common/mysql/protocol.cpp src/common/valkey.cpp src/common/ses
 
 .PHONY: all clean check test frida-paths
 
-all: $(OUT)/qcache $(OUT)/agent $(OUT)/kclient.bpf.o \
-     $(OUT)/libqcagent.so $(OUT)/qcinject
+all: $(OUT)/qc-barnacle $(OUT)/qc-daemon $(OUT)/kclient.bpf.o \
+     $(OUT)/libqcagent.so $(OUT)/qc-inject
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -106,7 +110,7 @@ $(OUT)/libqcagent.so: src/uclient/agent.cpp $(OUT)/qcagent_shared.o \
 	  $(FRIDA_DIR)/libfrida-gum.a \
 	  -static-libstdc++ -static-libgcc $(FRIDA_SYS)
 
-$(OUT)/qcinject: src/uclient/inject.cpp | $(OUT)
+$(OUT)/qc-inject: src/uclient/inject.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -Isrc -I$(FRIDA_DIR) $< -o $@ \
 	  $(FRIDA_DIR)/libfrida-core.a $(FRIDA_SYS)
 
@@ -115,27 +119,29 @@ frida-paths:
 	@test -f $(FRIDA_DIR)/libfrida-gum.a && echo "  gum:  found" || echo "  gum:  MISSING"
 	@test -f $(FRIDA_DIR)/libfrida-core.a && echo "  core: found" || echo "  core: MISSING"
 
-# --- agent: the userspace daemon -----------------------------------------
+# --- qc-daemon: the userspace daemon --------------------------------------
 #
 # Owns everything shared: loads kclient, creates the maps and the arena,
 # builds the dpipe pool, answers requests.
-$(OUT)/agent: src/agent/main.cpp src/agent/arena.cpp src/agent/dpipes.cpp \
-              src/common/stmtlist.cpp src/common/valkey.cpp \
-              src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
-              $(OUT)/kclient.skel.h
+$(OUT)/qc-daemon: src/daemon/main.cpp src/daemon/arena.cpp src/daemon/dpipes.cpp \
+                  src/common/stmtlist.cpp src/common/valkey.cpp \
+                  src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
+                  $(OUT)/kclient.skel.h
 	$(CXX) $(CXXFLAGS) -I$(OUT) -Isrc \
-	  src/agent/main.cpp src/agent/arena.cpp src/agent/dpipes.cpp \
+	  src/daemon/main.cpp src/daemon/arena.cpp src/daemon/dpipes.cpp \
 	  src/common/stmtlist.cpp src/common/valkey.cpp \
 	  src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
 	  -o $@ -lbpf -lelf -lz
 
-# --- qcache: the entry point ---------------------------------------------
+# --- qc-barnacle: the entry point -----------------------------------------
 #
-# Deliberately depends on nothing but libstdc++: it runs on the host, where
-# libbpf may not be installed at all, and its job is to report what it finds
-# rather than to load anything itself.
-$(OUT)/qcache: src/qcache/main.cpp src/qcache/config.cpp src/qcache/discover.cpp | $(OUT)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+# Python, and copied rather than compiled. It reads /proc, matches strings and
+# runs a subprocess -- no protocol work, no BPF map, not on any hot path. It
+# also runs on the HOST, where libbpf and a C++ toolchain may not exist at
+# all, which is the second reason not to build it.
+$(OUT)/qc-barnacle: src/barnacle/qc-barnacle | $(OUT)
+	cp $< $@
+	chmod +x $@
 
 # --- tests ----------------------------------------------------------------
 
@@ -196,7 +202,8 @@ test: check $(OUT)/test_caps $(OUT)/test_xproc
 clean-stale:
 	rm -f $(OUT)/uclient.bpf.o $(OUT)/uclient.skel.h $(OUT)/uclient_loader \
 	      $(OUT)/test_pipes $(OUT)/test_redirect $(OUT)/test_shm_bridge \
-	      $(OUT)/qcdemo $(OUT)/test_daemon
+	      $(OUT)/qcdemo $(OUT)/test_daemon $(OUT)/agent $(OUT)/qcache \
+	      $(OUT)/qcinject $(OUT)/test_stmtlist
 
 clean:
 	rm -rf $(OUT)

@@ -39,8 +39,8 @@
  * both ends are userspace. Swapping mechanisms later is contained to
  * wakeupWait() below.
  */
-#include "agent/arena.h"
-#include "agent/dpipes.h"
+#include "daemon/arena.h"
+#include "daemon/dpipes.h"
 #include "common/defs.h"
 #include "common/mysql/resultset.h"
 #include "common/stmtlist.h"

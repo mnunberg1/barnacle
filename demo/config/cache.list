@@ -1,3 +1,11 @@
-# Statements the transparent cache is allowed to serve from Valkey.
-# Exact byte match against the statement text on the wire.
-SELECT sku, name, price FROM products WHERE category = 'tools' AND SLEEP(1.5) = 0
+# Statements the transparent cache is allowed to serve.
+#
+# Exact byte match against the statement text on the wire -- no normalisation,
+# no parameter extraction. A statement listed here is a promise that its
+# result is worth reusing; anything not listed is passed through untouched.
+#
+# These are the two slow statements demo/workload.py issues (see its
+# QUERY_TEMPLATES). They use SLEEP() to stand in for a real slow query, so the
+# difference between a hit and a miss is visible without a large dataset.
+SELECT * FROM products WHERE category = 'safety' AND SLEEP(1.5) = 0
+SELECT * FROM orders WHERE customer = 'wayne industries' AND SLEEP(2) = 0

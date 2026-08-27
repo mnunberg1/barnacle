@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "agent/dpipes.h"
+#include "daemon/dpipes.h"
 
 #include <arpa/inet.h>
 #include <cerrno>

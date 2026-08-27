@@ -295,16 +295,51 @@ TEST(StmtList, MissingFileIsAnError)
 TEST(StmtList, MatchesTheShippedDemoList)
 {
 	/* The demo list is the closest thing to a real one in the tree, and it
-	 * is what the end-to-end test caches. */
+	 * is what the end-to-end demo caches. */
 	cache::StmtList l;
 	std::string err;
 
 	if (!l.load("demo/config/cache.list", err)) {
 		GTEST_SKIP() << "not running from the repo root: " << err;
 	}
-	EXPECT_EQ(l.size(), 1u);
-	EXPECT_TRUE(l.contains("SELECT sku, name, price FROM products "
-			       "WHERE category = 'tools' AND SLEEP(1.5) = 0"));
+	EXPECT_EQ(l.size(), 2u);
+	EXPECT_TRUE(l.contains("SELECT * FROM products WHERE category = 'safety' "
+			       "AND SLEEP(1.5) = 0"));
+	EXPECT_TRUE(l.contains("SELECT * FROM orders WHERE customer = "
+			       "'wayne industries' AND SLEEP(2) = 0"));
+}
+
+TEST(StmtList, DemoListNamesStatementsTheDemoWorkloadIssues)
+{
+	/*
+	 * Matching is byte for byte, so a demo list naming a statement the
+	 * workload never sends produces a demo that attaches, reports success,
+	 * and caches nothing -- which is exactly what shipped before this test
+	 * existed. Reading workload.py as text is enough to catch it: the
+	 * statements are literals in QUERY_TEMPLATES.
+	 */
+	cache::StmtList l;
+	std::string err;
+
+	if (!l.load("demo/config/cache.list", err)) {
+		GTEST_SKIP() << "not running from the repo root: " << err;
+	}
+
+	std::ifstream f("demo/workload.py");
+
+	if (!f) {
+		GTEST_SKIP() << "demo/workload.py not readable from here";
+	}
+
+	std::string py((std::istreambuf_iterator<char>(f)),
+		       std::istreambuf_iterator<char>());
+
+	for (const std::string &sql : l.all()) {
+		EXPECT_NE(py.find(sql), std::string::npos)
+			<< "demo/config/cache.list names a statement "
+			   "demo/workload.py never issues: "
+			<< sql;
+	}
 }
 
 /* --- the two halves together ---------------------------------------------- */

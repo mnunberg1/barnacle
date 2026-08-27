@@ -1,3 +1,12 @@
+# The demo stack: MySQL, Valkey, and a privileged build/run container.
+#
+# The project name is pinned rather than derived. Compose defaults it to the
+# directory holding this file -- "demo" -- which makes every documented
+# `docker compose -f demo/docker-compose.yml ...` depend on where it is run
+# from, and silently target a different project than the one already up.
+# Naming it here means the commands in the README work from anywhere.
+name: valkey-ebpf
+
 services:
   mysql:
     image: mysql:8.4
@@ -11,7 +20,22 @@ services:
     # demo's auth simple. TLS is no longer a problem for us: the cache
     # intercepts inside the client, above its TLS library, so encrypted
     # connections are the normal case rather than a blind spot.
-    command: ["--mysql-native-password=ON"]
+    #
+    # The general query log is ON for the demo, and logs EVERY statement the
+    # server is asked to run. That is the point: the claim being demonstrated
+    # is that a cached statement never reaches mysqld, and the only way to see
+    # that from the server's side is to have the server report everything it
+    # was asked. Written to a fixed path rather than the default, which is
+    # named after the container's hostname and so changes whenever the
+    # container is recreated.
+    #
+    # A debugging setting, not a production one: it writes a line per
+    # statement and grows without bound. It is here because this stack exists
+    # to be watched.
+    command:
+      - "--mysql-native-password=ON"
+      - "--general-log=ON"
+      - "--general-log-file=/var/lib/mysql/general.log"
     ports:
       - "13306:3306"
     volumes:

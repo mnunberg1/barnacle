@@ -10,16 +10,19 @@
 # rows and nothing arrives here.
 #
 # Uses MySQL's general query log, which records every statement the server is
-# asked to run. It is enabled at runtime rather than in the image, so no
-# restart is needed and the demo can turn it on and off around a run.
+# asked to run. The demo stack turns it on in docker-compose.yml, so it is
+# already running before this script starts and nothing is missed. If it is
+# off -- against a server this stack did not configure -- this enables it at
+# runtime, which needs no restart.
 #
 # The general log is a debugging tool, not something to leave on in
-# production: it writes a line per statement and grows without bound.
+# production: it writes a line per statement and grows without bound. The demo
+# enables it because this stack exists to be watched.
 #
 # Usage:
 #   demo/mysql-tail.sh              follow queries as they arrive
 #   demo/mysql-tail.sh -a           include Connect/Quit, not just queries
-#   demo/mysql-tail.sh --off        turn the log back off and exit
+#   demo/mysql-tail.sh --off        turn the log off and exit
 #
 # Run it in a second terminal, then run the workload in the first.
 
@@ -62,18 +65,24 @@ if [ "$OFF" = 1 ]; then
 	exit 0
 fi
 
-# Point the log somewhere predictable before enabling it: the default is named
-# after the container's hostname, which changes every time it is recreated.
-sql "SET GLOBAL general_log_file = '$LOGFILE'; SET GLOBAL general_log = 'ON';"
-
+# Normally already on, from the flags in docker-compose.yml. Enable it only if
+# it is not, so the common case touches no server state at all -- and point it
+# at a predictable path, since the default is named after the container's
+# hostname and changes whenever the container is recreated.
 if [ "$(sql 'SELECT @@general_log;')" != "1" ]; then
-	echo "mysql-tail: could not enable the general log." >&2
-	exit 1
+	echo "general log was off; enabling it for this session"
+	sql "SET GLOBAL general_log_file = '$LOGFILE'; SET GLOBAL general_log = 'ON';"
+	if [ "$(sql 'SELECT @@general_log;')" != "1" ]; then
+		echo "mysql-tail: could not enable the general log." >&2
+		exit 1
+	fi
+else
+	LOGFILE="$(sql 'SELECT @@general_log_file;')"
 fi
 
 echo "watching $CONTAINER:$LOGFILE -- every statement below REACHED the server."
 echo "a cached statement will not appear at all. ctrl-c to stop."
-echo "(run 'demo/mysql-tail.sh --off' afterwards to turn the log back off)"
+echo "(the demo stack leaves this log on; 'mysql-tail.sh --off' stops it)"
 echo
 
 # -n0: start at the end, so only traffic from now on is shown.

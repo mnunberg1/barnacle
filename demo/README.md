@@ -91,14 +91,25 @@ demo/mysql-tail.sh
 ```
 
 This runs on the host (it talks to the `mysql` container over `docker exec`)
-and follows MySQL's general query log, which records every statement the
+and follows MySQL's general query log, which records **every** statement the
 server is asked to run.
+
+The demo's MySQL is configured to keep that log on from startup — see the
+`--general-log` flags in `docker-compose.yml` — so nothing is missed and the
+script only has to read it. You do not need this script to see the traffic;
+it is just a readable view of a log that is already being written:
+
+```bash
+docker exec vebpf-mysql tail -f /var/lib/mysql/general.log
+```
 
 It is the honest half of the demo. A client-side timing number cannot
 distinguish a cache hit from a query that simply ran fast; this shows a hit as
 an **absence** — the application gets its rows and nothing arrives here.
 
-Turn the log back off when you are finished:
+The general log is a debugging setting: a line per statement, growing without
+bound. That is a fair trade for a stack whose purpose is to be watched, but if
+you want it off:
 
 ```bash
 demo/mysql-tail.sh --off
@@ -209,8 +220,14 @@ match `workload.py`'s `QUERY_TEMPLATES` exactly.
 docker compose -f demo/docker-compose.yml down -v
 ```
 
-The `-v` also drops the MySQL data volume, so the next `up` reseeds from
-`seed_mysql.sql`.
+The `-v` drops the anonymous volume holding MySQL's data, so the next `up`
+reseeds from `seed_mysql.sql`. Without it the data survives, including the
+general log — `docker compose down && up` keeps both.
+
+The compose file pins its project name to `valkey-ebpf`, so these commands
+work from any directory. Compose would otherwise derive the project from the
+directory holding the file (`demo`), and a command run from elsewhere would
+quietly address a different stack than the one that is up.
 
 ## Using your own config instead of the demo's
 

@@ -459,13 +459,17 @@ void Daemon::serve(int fd)
 
 		if (req.len == 0 || req.len > QC_STORE_MAX ||
 		    !readExactly(fd, body.data(), req.len)) {
-			pool.release(key);
 			return;
 		}
 		store(key, body);
 		/* No reply: the client is not waiting. It already has the
-		 * answer -- that is where these bytes came from. */
-		pool.release(key);
+		 * answer -- that is where these bytes came from.
+		 *
+		 * And no release. The client owns that, per architecture.txt:
+		 * it pops the freelist, so it puts the key back. Releasing here
+		 * too pushes the same key onto the freelist twice, and two
+		 * clients then splice different connections to one dpipe.
+		 */
 		return;
 	}
 	struct dpipe rec {};
@@ -508,8 +512,9 @@ void Daemon::serve(int fd)
 		if (opt.verbose) {
 			fprintf(stderr, "daemon: dpipe %u woke with no statement\n", key);
 		}
+		/* The client releases on seeing this status; doing it here as
+		 * well would put the key on the freelist twice. */
 		reply(fd, AGENT_CACHE_ERROR, 0);
-		pool.release(key);
 		return;
 	}
 

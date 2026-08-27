@@ -137,10 +137,29 @@ bool Pool::release(uint32_t key)
 	if (bpf_map_lookup_elem(maps.meta, &zero, &meta)) {
 		return false;
 	}
+	/*
+	 * Refuse to push a key that is already on the freelist.
+	 *
+	 * The client owns the release (architecture.txt), so nothing here
+	 * should ever be releasing a live pipe -- this exists so that a
+	 * mistake about that corrupts nothing. Pushing a key twice makes it
+	 * pop twice, and two clients then splice different connections to one
+	 * dpipe, which is a data-crossing bug rather than a lost request.
+	 *
+	 * A full freelist means every pipe is already free, so any release is
+	 * a duplicate; below that, look for the key itself. The scan is over
+	 * num_free entries on a path that runs once per statement, against a
+	 * pool of a few thousand.
+	 */
 	if (meta.num_free >= pipes.size() && !pipes.empty()) {
-		/* Already free. Releasing twice would hand the same pipe to two
-		 * clients at once. */
 		return true;
+	}
+	for (uint32_t i = 0; i < meta.num_free; i++) {
+		uint32_t have = 0;
+
+		if (bpf_map_lookup_elem(maps.freelist, &i, &have) == 0 && have == key) {
+			return true;
+		}
 	}
 
 	uint32_t slot = meta.num_free;

@@ -306,11 +306,31 @@ def daemon_running():
 
 
 def alive(pid):
+    """Is this process still running -- and still a process?
+
+    kill(pid, 0) is not enough on its own. It succeeds for a ZOMBIE, which is
+    a process that has exited and whose parent has not reaped it yet: the pid
+    is still taken, /proc/<pid> still exists, and there is no address space
+    behind any of it. An agent cannot be intercepting anything there, so
+    counting it as attached would report a cache that is working when it is
+    not. Eight clients killed at once is exactly how that shows up.
+
+    The state is the field after the comm, and the comm is in parentheses and
+    may itself contain spaces or parentheses -- so it is found from the LAST
+    close paren, never by splitting on whitespace.
+    """
     try:
         os.kill(pid, 0)
     except OSError as e:
-        return e.errno == errno.EPERM
-    return True
+        if e.errno != errno.EPERM:
+            return False
+
+    stat = read_file("%s/%d/stat" % (PROC, pid), 4096).decode("utf-8", "replace")
+    end = stat.rfind(")")
+    if end < 0:
+        return False  # gone between the kill() and here
+    rest = stat[end + 1:].split()
+    return bool(rest) and rest[0] != "Z"
 
 
 def read_attached():

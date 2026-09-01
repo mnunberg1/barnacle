@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#pragma once
 /*
  * protocol.h - MySQL client/server protocol framing and parsing.
  *
@@ -19,16 +20,14 @@
  * the point -- it is the only part of the system that can be tested without
  * a live database and a privileged container.
  */
-#ifndef VALKEY_EBPF_MYSQL_PROTOCOL_H
-#define VALKEY_EBPF_MYSQL_PROTOCOL_H
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace mysql {
+namespace mysql
+{
 
 /* Every packet is a 4-byte header (3-byte little-endian payload length, then
  * a 1-byte sequence id) followed by that many payload bytes. */
@@ -44,50 +43,50 @@ constexpr uint32_t kMaxPayload = 0xFFFFFF;
 /* Capability flags. Only those this project actually reasons about are
  * named; the numeric values are from the MySQL protocol documentation. */
 enum Capability : uint32_t {
-	CLIENT_LONG_PASSWORD = 0x00000001,
-	CLIENT_COMPRESS = 0x00000020,
-	CLIENT_PROTOCOL_41 = 0x00000200,
-	CLIENT_SSL = 0x00000800,
-	CLIENT_TRANSACTIONS = 0x00002000,
-	CLIENT_SECURE_CONNECTION = 0x00008000,
-	CLIENT_MULTI_STATEMENTS = 0x00010000,
-	CLIENT_MULTI_RESULTS = 0x00020000,
-	CLIENT_PLUGIN_AUTH = 0x00080000,
-	CLIENT_CONNECT_ATTRS = 0x00100000,
-	CLIENT_SESSION_TRACK = 0x00800000,
-	CLIENT_DEPRECATE_EOF = 0x01000000,
-	CLIENT_ZSTD_COMPRESSION_ALGORITHM = 0x04000000,
-	CLIENT_QUERY_ATTRIBUTES = 0x08000000,
+    CLIENT_LONG_PASSWORD = 0x00000001,
+    CLIENT_COMPRESS = 0x00000020,
+    CLIENT_PROTOCOL_41 = 0x00000200,
+    CLIENT_SSL = 0x00000800,
+    CLIENT_TRANSACTIONS = 0x00002000,
+    CLIENT_SECURE_CONNECTION = 0x00008000,
+    CLIENT_MULTI_STATEMENTS = 0x00010000,
+    CLIENT_MULTI_RESULTS = 0x00020000,
+    CLIENT_PLUGIN_AUTH = 0x00080000,
+    CLIENT_CONNECT_ATTRS = 0x00100000,
+    CLIENT_SESSION_TRACK = 0x00800000,
+    CLIENT_DEPRECATE_EOF = 0x01000000,
+    CLIENT_ZSTD_COMPRESSION_ALGORITHM = 0x04000000,
+    CLIENT_QUERY_ATTRIBUTES = 0x08000000,
 };
 
 /* Server status flags, carried in OK/EOF packets. IN_TRANS is the one that
  * matters most here: caching must be bypassed while a transaction is open. */
 enum ServerStatus : uint16_t {
-	SERVER_STATUS_IN_TRANS = 0x0001,
-	SERVER_STATUS_AUTOCOMMIT = 0x0002,
-	SERVER_MORE_RESULTS_EXISTS = 0x0008,
+    SERVER_STATUS_IN_TRANS = 0x0001,
+    SERVER_STATUS_AUTOCOMMIT = 0x0002,
+    SERVER_MORE_RESULTS_EXISTS = 0x0008,
 };
 
 enum Command : uint8_t {
-	COM_QUIT = 0x01,
-	COM_INIT_DB = 0x02,
-	COM_QUERY = 0x03,
-	/* No payload beyond the command byte. Worth naming because it is the
-	 * clearest example of a packet that must be consumed rather than
-	 * skipped: ignoring its bytes would misalign everything after it. */
-	COM_PING = 0x0E,
-	COM_STMT_PREPARE = 0x16,
-	COM_STMT_EXECUTE = 0x17,
-	COM_STMT_CLOSE = 0x19,
+    COM_QUIT = 0x01,
+    COM_INIT_DB = 0x02,
+    COM_QUERY = 0x03,
+    /* No payload beyond the command byte. Worth naming because it is the
+     * clearest example of a packet that must be consumed rather than
+     * skipped: ignoring its bytes would misalign everything after it. */
+    COM_PING = 0x0E,
+    COM_STMT_PREPARE = 0x16,
+    COM_STMT_EXECUTE = 0x17,
+    COM_STMT_CLOSE = 0x19,
 };
 
 /* One reassembled logical message: continuation packets are already joined,
  * so `payload` is the complete command or response body. */
 struct Message {
-	std::vector<uint8_t> payload;
-	uint8_t first_seq = 0; /* sequence id of the first wire packet */
-	uint8_t last_seq = 0;  /* sequence id of the final wire packet */
-	size_t wire_size = 0;  /* total bytes on the wire, headers included */
+    std::vector<uint8_t> payload;
+    uint8_t first_seq = 0; /* sequence id of the first wire packet */
+    uint8_t last_seq = 0;  /* sequence id of the final wire packet */
+    size_t wire_size = 0;  /* total bytes on the wire, headers included */
 };
 
 /*
@@ -98,30 +97,31 @@ struct Message {
  * This exists because neither send() nor recv() respects message boundaries:
  * a single SSL_read may deliver half a packet or three of them.
  */
-class MessageReader {
+class MessageReader
+{
 public:
-	void append(const uint8_t *data, size_t len);
-	void append(std::string_view s);
+    void append(const uint8_t *data, size_t len);
+    void append(std::string_view s);
 
-	/* Pull the next complete message. Returns false if more bytes are
-	 * needed, leaving `out` untouched. */
-	bool next(Message &out);
+    /* Pull the next complete message. Returns false if more bytes are
+     * needed, leaving `out` untouched. */
+    bool next(Message &out);
 
-	/* Bytes held but not yet formed into a complete message. */
-	size_t buffered() const
-	{
-		return buf_.size() - consumed_;
-	}
+    /* Bytes held but not yet formed into a complete message. */
+    size_t buffered() const
+    {
+        return buf_.size() - consumed_;
+    }
 
-	/* Discard all state. Use when a connection resets or when switching
-	 * from the plaintext handshake phase into TLS. */
-	void reset();
+    /* Discard all state. Use when a connection resets or when switching
+     * from the plaintext handshake phase into TLS. */
+    void reset();
 
 private:
-	void compact();
+    void compact();
 
-	std::vector<uint8_t> buf_;
-	size_t consumed_ = 0;
+    std::vector<uint8_t> buf_;
+    size_t consumed_ = 0;
 };
 
 /* Server's initial handshake (Protocol::HandshakeV10). Sent in plaintext on
@@ -129,14 +129,14 @@ private:
  * detecting TLS by "does the first message parse as MySQL" does not work,
  * and why CLIENT_SSL in the client's reply is the real signal. */
 struct ServerHandshake {
-	uint8_t protocol_version = 0;
-	std::string server_version;
-	uint32_t connection_id = 0;
-	std::vector<uint8_t> scramble; /* auth-plugin-data, both parts joined */
-	uint32_t capabilities = 0;
-	uint8_t charset = 0;
-	uint16_t status_flags = 0;
-	std::string auth_plugin;
+    uint8_t protocol_version = 0;
+    std::string server_version;
+    uint32_t connection_id = 0;
+    std::vector<uint8_t> scramble; /* auth-plugin-data, both parts joined */
+    uint32_t capabilities = 0;
+    uint8_t charset = 0;
+    uint16_t status_flags = 0;
+    std::string auth_plugin;
 };
 
 bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out);
@@ -146,12 +146,12 @@ bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out)
  * payload stops after the fixed 32-byte prefix, it is an SSLRequest and the
  * connection is about to go encrypted. */
 struct ClientHandshake {
-	uint32_t capabilities = 0;
-	uint32_t max_packet_size = 0;
-	uint8_t charset = 0;
-	bool ssl_request = false; /* truncated form: TLS upgrade follows */
-	std::string username;
-	std::string database;
+    uint32_t capabilities = 0;
+    uint32_t max_packet_size = 0;
+    uint8_t charset = 0;
+    bool ssl_request = false; /* truncated form: TLS upgrade follows */
+    std::string username;
+    std::string database;
 };
 
 bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out);
@@ -160,7 +160,7 @@ bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out)
  * what both sides advertised. */
 inline uint32_t negotiate(uint32_t server_caps, uint32_t client_caps)
 {
-	return server_caps & client_caps;
+    return server_caps & client_caps;
 }
 
 /*
@@ -179,21 +179,21 @@ inline uint32_t negotiate(uint32_t server_caps, uint32_t client_caps)
 bool extractQuery(const uint8_t *data, size_t len, uint32_t caps, std::string_view &out);
 
 enum class ResponseKind {
-	Ok,
-	Err,
-	Eof,
-	LocalInfile,
-	ResultSet, /* leading column count; column defs and rows follow */
-	Unknown,
+    Ok,
+    Err,
+    Eof,
+    LocalInfile,
+    ResultSet, /* leading column count; column defs and rows follow */
+    Unknown,
 };
 
 ResponseKind classifyResponse(const uint8_t *data, size_t len, uint32_t caps);
 
 struct OkPacket {
-	uint64_t affected_rows = 0;
-	uint64_t last_insert_id = 0;
-	uint16_t status_flags = 0;
-	uint16_t warnings = 0;
+    uint64_t affected_rows = 0;
+    uint64_t last_insert_id = 0;
+    uint16_t status_flags = 0;
+    uint16_t warnings = 0;
 };
 
 /* Parse an OK (or, when CLIENT_DEPRECATE_EOF is set, an EOF-shaped OK).
@@ -202,8 +202,8 @@ struct OkPacket {
 bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out);
 
 struct EofPacket {
-	uint16_t warnings = 0;
-	uint16_t status_flags = 0;
+    uint16_t warnings = 0;
+    uint16_t status_flags = 0;
 };
 
 /*
@@ -221,9 +221,9 @@ struct EofPacket {
 bool parseEof(const uint8_t *data, size_t len, EofPacket &out);
 
 struct ErrPacket {
-	uint16_t error_code = 0;
-	std::string sql_state;
-	std::string message;
+    uint16_t error_code = 0;
+    std::string sql_state;
+    std::string message;
 };
 
 bool parseErr(const uint8_t *data, size_t len, uint32_t caps, ErrPacket &out);
@@ -256,5 +256,3 @@ bool readLenEnc(const uint8_t *data, size_t len, size_t &pos, uint64_t &out);
 bool readLenEncString(const uint8_t *data, size_t len, size_t &pos, std::string_view &out);
 
 } // namespace mysql
-
-#endif /* VALKEY_EBPF_MYSQL_PROTOCOL_H */

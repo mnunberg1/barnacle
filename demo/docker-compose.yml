@@ -5,12 +5,12 @@
 # `docker compose -f demo/docker-compose.yml ...` depend on where it is run
 # from, and silently target a different project than the one already up.
 # Naming it here means the commands in the README work from anywhere.
-name: valkey-ebpf
+name: barnacle
 
 services:
   mysql:
     image: mysql:8.4
-    container_name: vebpf-mysql
+    container_name: bncl-mysql
     environment:
       MYSQL_ROOT_PASSWORD: rootpw
       MYSQL_DATABASE: shop
@@ -49,7 +49,7 @@ services:
   valkey:
     # valkey-bundle ships the valkey-search module (FT.CREATE / FT.SEARCH).
     image: valkey/valkey-bundle:latest
-    container_name: vebpf-valkey
+    container_name: bncl-valkey
     ports:
       - "16379:6379"
     healthcheck:
@@ -58,10 +58,67 @@ services:
       timeout: 3s
       retries: 10
 
-  bpf:
+  # The client application: a sealed program that knows nothing about the
+  # cache, in its own container and its own image. Everything the cache does
+  # to it is done from outside, to a process that is already running -- which
+  # is the claim the whole demo exists to show.
+  #
+  # It is given two things it would not otherwise have, and both are
+  # consequences of the architecture rather than conveniences:
+  #
+  #   /sys/fs/bpf  the agent runs INSIDE this process, with this process's
+  #                credentials, and opens the maps the daemon pinned. It
+  #                cannot open a pin it cannot see.
+  #   cap_add      and it cannot call bpf(2) without CAP_BPF. On a host
+  #                deployment this question does not come up in the same form:
+  #                the pins are simply there, and the caps are whatever the
+  #                target process already has.
+  #
+  # Note what is NOT here: no volume from this repository, no build output, no
+  # statement list. barnacle puts the agent and the list inside this container
+  # at attach time, by writing through /proc/<pid>/root.
+  client:
     build:
-      context: ./docker
-    container_name: vebpf-bpf
+      context: ./client
+    container_name: bncl-client
+    cap_add:
+      - BPF
+      - PERFMON
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: app
+      MYSQL_PASSWORD: apppw
+      MYSQL_DB: shop
+    restart: unless-stopped
+    # A pty and an open stdin, so the client's display can be driven from the
+    # keyboard: `docker attach` connects to it and +/- change how often the
+    # frame repaints. `docker logs -f` is a one-way stream with no keyboard
+    # behind it, which is why this is needed at all -- and why the client
+    # works perfectly well without anyone attaching.
+    stdin_open: true
+    tty: true
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # The controller: where the daemon runs and where `barnacle` is typed.
+  #
+  # Named ctl rather than bpf because "bpf" describes how one component is
+  # built rather than what this container is for -- and rather than host,
+  # because `pid: host` a few lines down would read very badly in a service
+  # called host.
+  #
+  # It has supervisor access to the client -- host PID namespace so it can see
+  # the client's processes, and the privilege to ptrace one and write to its
+  # /proc/<pid>/root. It has no such relationship with mysql or valkey; it
+  # talks to valkey as an ordinary client and never talks to mysql at all.
+  ctl:
+    build:
+      context: ./ctl
+    container_name: bncl-ctl
     # eBPF needs to load programs and read kernel BTF; host PID namespace lets
     # the tracer see clients running in the other containers.
     privileged: true
@@ -82,6 +139,11 @@ services:
       MYSQL_DB: shop
       VALKEY_HOST: valkey
       VALKEY_PORT: "6379"
+      # So the control window is `barnacle status` rather than
+      # `./build/barnacle -c demo/config/barnacle.conf status` every time.
+      # Both are conveniences for the demo; neither is needed to run barnacle.
+      BARNACLE_CONF: /workspace/demo/config/barnacle.conf
+      PATH: "/workspace/build:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     depends_on:
       mysql:
         condition: service_healthy
@@ -89,3 +151,9 @@ services:
         condition: service_healthy
     working_dir: /workspace
     command: ["sleep", "infinity"]
+
+# One user-defined bridge, named, so `demo/netem.sh` can find the interface it
+# has to shape without guessing which of docker's generated networks is ours.
+networks:
+  default:
+    name: bncl-net

@@ -8,8 +8,8 @@
  * by the sk_msg redirect, can be read and navigated in an editor. They only
  * ever run on Linux.
  */
-#ifndef VALKEY_QCACHE_SHIM_SYS_EPOLL_H
-#define VALKEY_QCACHE_SHIM_SYS_EPOLL_H
+#ifndef BNCL_SHIM_SYS_EPOLL_H
+#define BNCL_SHIM_SYS_EPOLL_H
 
 #include <stdint.h>
 
@@ -28,15 +28,15 @@ extern "C" {
 #define EPOLL_CTL_MOD 3
 
 typedef union epoll_data {
-	void *ptr;
-	int fd;
-	uint32_t u32;
-	uint64_t u64;
+        void *ptr;
+        int fd;
+        uint32_t u32;
+        uint64_t u64;
 } epoll_data_t;
 
 struct epoll_event {
-	uint32_t events;
-	epoll_data_t data;
+        uint32_t events;
+        epoll_data_t data;
 };
 
 int epoll_create1(int flags);
@@ -47,4 +47,4 @@ int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
 }
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_SYS_EPOLL_H */
+#endif /* BNCL_SHIM_SYS_EPOLL_H */

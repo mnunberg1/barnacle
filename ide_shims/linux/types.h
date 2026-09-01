@@ -3,8 +3,8 @@
  * Stand-in for Linux's <linux/types.h>: the fixed-width kernel typedefs that
  * headers shared between BPF and userspace rely on.
  */
-#ifndef VALKEY_QCACHE_SHIM_LINUX_TYPES_H
-#define VALKEY_QCACHE_SHIM_LINUX_TYPES_H
+#ifndef BNCL_SHIM_LINUX_TYPES_H
+#define BNCL_SHIM_LINUX_TYPES_H
 
 #include <stdint.h>
 
@@ -17,4 +17,4 @@ typedef int32_t __s32;
 typedef uint64_t __u64;
 typedef int64_t __s64;
 
-#endif /* VALKEY_QCACHE_SHIM_LINUX_TYPES_H */
+#endif /* BNCL_SHIM_LINUX_TYPES_H */

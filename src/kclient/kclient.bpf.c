@@ -88,20 +88,20 @@ char LICENSE[] SEC("license") = "GPL";
 
 /* Daemon-side dpipe sockets. */
 struct {
-	__uint(type, BPF_MAP_TYPE_SOCKMAP);
-	__uint(max_entries, QC_MAX_PIPES);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_SOCKMAP);
+    __uint(max_entries, BNCL_MAX_PIPES);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } dpipe_map SEC(".maps");
 
 /* Hijacked client DB sockets. */
 struct {
-	__uint(type, BPF_MAP_TYPE_SOCKMAP);
-	__uint(max_entries, QC_MAX_PIPES);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_SOCKMAP);
+    __uint(max_entries, BNCL_MAX_PIPES);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } cpipe_map SEC(".maps");
 
 /*
@@ -117,11 +117,11 @@ struct {
  * pipe cannot leave a stale pairing behind to misdeliver a later write.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_SK_STORAGE);
-	__uint(map_flags, BPF_F_NO_PREALLOC);
-	__type(key, int);
-	__type(value, struct pipe_sk_info);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_SK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, struct pipe_sk_info);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } pipe_sk_info_map SEC(".maps");
 
 /* --- the pool ------------------------------------------------------------
@@ -132,19 +132,19 @@ struct {
  * through -- exhaustion must never block a client.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, QC_MAX_PIPES);
-	__type(key, __u32);
-	__type(value, __u32); /* index into dpipe_map */
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, BNCL_MAX_PIPES);
+    __type(key, __u32);
+    __type(value, __u32); /* index into dpipe_map */
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } dpipe_freelist SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, struct dpipes_meta);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct dpipes_meta);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } dpipes_meta_map SEC(".maps");
 
 /* The dpipe records themselves, indexed the same way as dpipe_map.
@@ -154,11 +154,11 @@ struct {
  * daemon learns what to resolve without the message carrying anything but a
  * key. */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, QC_MAX_PIPES);
-	__type(key, __u32);
-	__type(value, struct dpipe);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, BNCL_MAX_PIPES);
+    __type(key, __u32);
+    __type(value, struct dpipe);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } dpipes SEC(".maps");
 
 /* --- the arena -----------------------------------------------------------
@@ -172,11 +172,11 @@ struct {
  * control socket.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARENA);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__uint(max_entries, QC_ARENA_PAGES);
-	__ulong(map_extra, QC_ARENA_VA);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_ARENA);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __uint(max_entries, BNCL_ARENA_PAGES);
+    __ulong(map_extra, BNCL_ARENA_VA);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } arena SEC(".maps");
 
 /* --- the statement table -------------------------------------------------
@@ -188,28 +188,28 @@ struct {
  * through a socket: the client reads the bytes where they already are.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, QC_MAX_STMTS);
-	__type(key, struct stmt_key);
-	__type(value, stmt_ref); /* arena address; the record itself is there */
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, BNCL_MAX_STMTS);
+    __type(key, struct stmt_key);
+    __type(value, stmt_ref); /* arena address; the record itself is there */
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } stmts_map SEC(".maps");
 
 /* Runtime configuration. An array rather than .rodata so the daemon can flip
  * the enable flag and change the target port without reloading. */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, QC_CFG__N);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, BNCL_CFG__N);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } cfg SEC(".maps");
 
 static __always_inline __u32 cfg_get(__u32 slot)
 {
-	__u32 *v = bpf_map_lookup_elem(&cfg, &slot);
+    __u32 *v = bpf_map_lookup_elem(&cfg, &slot);
 
-	return v ? *v : 0;
+    return v ? *v : 0;
 }
 
 /*
@@ -225,19 +225,19 @@ static __always_inline __u32 cfg_get(__u32 slot)
 SEC("sk_msg")
 int splice_c2d(struct sk_msg_md *msg)
 {
-	struct pipe_sk_info *info;
+    struct pipe_sk_info *info;
 
-	if (!cfg_get(QC_CFG_ENABLED)) {
-		return SK_PASS;
-	}
-	if (!msg->sk) {
-		return SK_PASS;
-	}
-	info = bpf_sk_storage_get(&pipe_sk_info_map, msg->sk, NULL, 0);
-	if (!info || !info->paired) {
-		return SK_PASS;
-	}
-	return bpf_msg_redirect_map(msg, &dpipe_map, info->key, BPF_F_INGRESS);
+    if (!cfg_get(BNCL_CFG_ENABLED)) {
+        return SK_PASS;
+    }
+    if (!msg->sk) {
+        return SK_PASS;
+    }
+    info = bpf_sk_storage_get(&pipe_sk_info_map, msg->sk, NULL, 0);
+    if (!info || !info->paired) {
+        return SK_PASS;
+    }
+    return bpf_msg_redirect_map(msg, &dpipe_map, info->key, BPF_F_INGRESS);
 }
 
 /*
@@ -252,18 +252,17 @@ int splice_c2d(struct sk_msg_md *msg)
 SEC("sk_msg")
 int splice_d2c(struct sk_msg_md *msg)
 {
-	struct pipe_sk_info *info;
+    struct pipe_sk_info *info;
 
-	if (!cfg_get(QC_CFG_ENABLED)) {
-		return SK_PASS;
-	}
-	if (!msg->sk) {
-		return SK_PASS;
-	}
-	info = bpf_sk_storage_get(&pipe_sk_info_map, msg->sk, NULL, 0);
-	if (!info || !info->paired) {
-		return SK_PASS;
-	}
-	return bpf_msg_redirect_map(msg, &cpipe_map, info->key,
-				    BPF_F_INGRESS);
+    if (!cfg_get(BNCL_CFG_ENABLED)) {
+        return SK_PASS;
+    }
+    if (!msg->sk) {
+        return SK_PASS;
+    }
+    info = bpf_sk_storage_get(&pipe_sk_info_map, msg->sk, NULL, 0);
+    if (!info || !info->paired) {
+        return SK_PASS;
+    }
+    return bpf_msg_redirect_map(msg, &cpipe_map, info->key, BPF_F_INGRESS);
 }

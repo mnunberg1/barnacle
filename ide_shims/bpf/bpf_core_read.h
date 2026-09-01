@@ -4,8 +4,8 @@
  * Not currently used by this project -- present so an include resolves rather
  * than failing to parse if one is added.
  */
-#ifndef VALKEY_QCACHE_SHIM_BPF_CORE_READ_H
-#define VALKEY_QCACHE_SHIM_BPF_CORE_READ_H
+#ifndef BNCL_SHIM_BPF_CORE_READ_H
+#define BNCL_SHIM_BPF_CORE_READ_H
 
 #include "../vmlinux.h"
 
@@ -13,4 +13,4 @@
 #define BPF_CORE_READ_INTO(dst, src, a...) (void)0
 #define bpf_core_field_exists(field) 1
 
-#endif /* VALKEY_QCACHE_SHIM_BPF_CORE_READ_H */
+#endif /* BNCL_SHIM_BPF_CORE_READ_H */

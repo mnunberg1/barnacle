@@ -37,60 +37,62 @@
 #include <cstdint>
 #include <vector>
 
-/* Namespace is `qcd`, not `daemon`: <unistd.h> declares daemon(int, int),
- * and a namespace of that name collides with it. */
-namespace qcd {
+/* Namespace is `bncld`, not `bncl::daemon` or `daemon`: <unistd.h> declares
+ * daemon(int, int), and a namespace of that name collides with it. */
+namespace bncld
+{
 
 struct Pipe {
-	uint32_t key = 0; /* index in dpipe_map, dpipes and the freelist */
-	int sfd = -1;     /* the daemon's i/o end; this is what dpipe_map holds */
-	int cfd = -1;     /* far end, held open only to keep the connection up */
+    uint32_t key = 0; /* index in dpipe_map, dpipes and the freelist */
+    int sfd = -1;     /* the daemon's i/o end; this is what dpipe_map holds */
+    int cfd = -1;     /* far end, held open only to keep the connection up */
 };
 
 /* The map descriptors the pool needs. Grouped so the daemon can hand them
  * over in one go rather than as five positional arguments. */
 struct PoolMaps {
-	int dpipe_map = -1;
-	int dpipes = -1;
-	int freelist = -1;
-	int meta = -1;
-	int info = -1;
+    int dpipe_map = -1;
+    int dpipes = -1;
+    int freelist = -1;
+    int meta = -1;
+    int info = -1;
 };
 
-class Pool {
+class Pool
+{
 public:
-	/* Build `count` pipes, register each in dpipe_map, write its record to
-	 * dpipes, and publish its key on the freelist. */
-	bool init(const PoolMaps &m, size_t count);
-	void shutdown();
+    /* Build `count` pipes, register each in dpipe_map, write its record to
+     * dpipes, and publish its key on the freelist. */
+    bool init(const PoolMaps &m, size_t count);
+    void shutdown();
 
-	size_t size() const
-	{
-		return pipes.size();
-	}
+    size_t size() const
+    {
+        return pipes.size();
+    }
 
-	/* The pipe behind a key, or nullptr. The daemon needs this to turn the
-	 * key a client published back into something it can write to. */
-	Pipe *byKey(uint32_t key);
+    /* The pipe behind a key, or nullptr. The daemon needs this to turn the
+     * key a client published back into something it can write to. */
+    Pipe *byKey(uint32_t key);
 
-	/* Every sfd, for the daemon's epoll set. */
-	std::vector<int> fds() const;
+    /* Every sfd, for the daemon's epoll set. */
+    std::vector<int> fds() const;
 
-	/* Put a key back on the freelist and clear its splice. Called when a
-	 * request finishes; leaving it spliced would redirect a later,
-	 * unrelated write into a client that has moved on. */
-	bool release(uint32_t key);
+    /* Put a key back on the freelist and clear its splice. Called when a
+     * request finishes; leaving it spliced would redirect a later,
+     * unrelated write into a client that has moved on. */
+    bool release(uint32_t key);
 
-	/* How many keys are currently on the freelist. */
-	uint32_t freeCount() const;
+    /* How many keys are currently on the freelist. */
+    uint32_t freeCount() const;
 
 private:
-	bool makePipe(Pipe &p);
-	bool publish(const Pipe &p);
+    bool makePipe(Pipe &p);
+    bool publish(const Pipe &p);
 
-	PoolMaps maps;
-	std::vector<Pipe> pipes;
-	int listen_fd = -1;
+    PoolMaps maps;
+    std::vector<Pipe> pipes;
+    int listen_fd = -1;
 };
 
-} // namespace qcd
+} // namespace bncld

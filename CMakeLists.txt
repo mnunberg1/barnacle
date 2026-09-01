@@ -10,7 +10,7 @@
 # definitions, so targets are syntax-only there; that is deliberate, since a
 # fake implementation would misrepresent what the code does.
 cmake_minimum_required(VERSION 3.16)
-project(valkey_qcache C CXX)
+project(barnacle C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
@@ -24,9 +24,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 else()
     set(ON_LINUX FALSE)
     message(STATUS
-        "valkey-qcache: non-Linux host (${CMAKE_SYSTEM_NAME}) -- configuring "
+        "barnacle: non-Linux host (${CMAKE_SYSTEM_NAME}) -- configuring "
         "against ide_shims/ for editor support only. eBPF does not exist here; "
-        "build with 'docker compose -f demo/docker-compose.yml exec bpf make'.")
+        "build with 'docker compose -f demo/docker-compose.yml exec ctl make'.")
 endif()
 
 # --- always native: no Linux-only headers involved -----------------------
@@ -34,10 +34,10 @@ endif()
 # Includes are written relative to the source root, so that is what goes on
 # the path -- PUBLIC, since every test below includes these headers the same
 # way the sources do.
-add_library(qcache_mysql STATIC
+add_library(barnacle_mysql STATIC
     src/common/mysql/protocol.cpp
     src/common/mysql/resultset.cpp)
-target_include_directories(qcache_mysql PUBLIC src)
+target_include_directories(barnacle_mysql PUBLIC src)
 
 # GoogleTest drives the userspace units. It is usually absent on a
 # workstation, so the tests are optional here -- the point of this file off
@@ -47,12 +47,12 @@ enable_testing()
 find_package(GTest QUIET)
 if(GTest_FOUND)
     add_executable(test_protocol tests/test_protocol.cpp)
-    target_link_libraries(test_protocol PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_protocol PRIVATE barnacle_mysql GTest::gtest GTest::gtest_main)
     add_test(NAME protocol COMMAND test_protocol)
 
     add_executable(test_session tests/test_session.cpp src/common/session.cpp)
     target_include_directories(test_session PRIVATE src)
-    target_link_libraries(test_session PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_session PRIVATE barnacle_mysql GTest::gtest GTest::gtest_main)
     add_test(NAME session COMMAND test_session)
 
     add_executable(test_request tests/test_request.cpp src/common/session.cpp
@@ -63,14 +63,14 @@ if(GTest_FOUND)
     if(NOT ON_LINUX)
         target_include_directories(test_request PRIVATE ${SHIMS})
     endif()
-    target_link_libraries(test_request PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_request PRIVATE barnacle_mysql GTest::gtest GTest::gtest_main)
     add_test(NAME request COMMAND test_request)
 
     add_executable(test_resultset tests/test_resultset.cpp)
-    target_link_libraries(test_resultset PRIVATE qcache_mysql GTest::gtest GTest::gtest_main)
+    target_link_libraries(test_resultset PRIVATE barnacle_mysql GTest::gtest GTest::gtest_main)
     add_test(NAME resultset COMMAND test_resultset)
 else()
-    message(STATUS "valkey-qcache: GoogleTest not found -- unit tests not configured")
+    message(STATUS "barnacle: GoogleTest not found -- unit tests not configured")
 endif()
 
 # --- everything else: real on Linux, shimmed elsewhere -------------------

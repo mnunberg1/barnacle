@@ -7,8 +7,8 @@
  * ...)`), so redeclaring here is a guaranteed conflict. Only the syscall
  * numbers are supplied -- the part macOS genuinely lacks.
  */
-#ifndef VALKEY_QCACHE_SHIM_SYSCALL_H
-#define VALKEY_QCACHE_SHIM_SYSCALL_H
+#ifndef BNCL_SHIM_SYSCALL_H
+#define BNCL_SHIM_SYSCALL_H
 
 #include <unistd.h>
 
@@ -28,4 +28,4 @@
 #define __NR_perf_event_open SYS_perf_event_open
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_SYSCALL_H */
+#endif /* BNCL_SHIM_SYSCALL_H */

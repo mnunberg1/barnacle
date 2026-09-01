@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#pragma once
 /*
  * session.h - per-connection MySQL response tracking and cache decisions.
  *
@@ -20,16 +21,14 @@
  * captured from the handshake rather than assumed: the same bytes mean
  * different things depending on what the two sides agreed to.
  */
-#ifndef VALKEY_EBPF_CACHE_SESSION_H
-#define VALKEY_EBPF_CACHE_SESSION_H
-
 #include "mysql/protocol.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace cache {
+namespace bncl
+{
 
 /*
  * The request side: plaintext bytes handed to SSL_write, reassembled into
@@ -45,90 +44,92 @@ namespace cache {
  * than parsed leaves the reader misaligned for everything after it -- the
  * next "statement" would be read from the middle of the previous one.
  */
-class RequestTracker {
+class RequestTracker
+{
 public:
-	/* `caps` must be the negotiated set. CLIENT_QUERY_ATTRIBUTES changes
-	 * where the statement text begins, so guessing gets it wrong on MySQL
-	 * 8.0.26 and later. */
-	void begin(uint32_t caps);
+    /* `caps` must be the negotiated set. CLIENT_QUERY_ATTRIBUTES changes
+     * where the statement text begins, so guessing gets it wrong on MySQL
+     * 8.0.26 and later. */
+    void begin(uint32_t caps);
 
-	/* Feed plaintext from one SSL_write. Returns true when a complete
-	 * COM_QUERY has been assembled, with its text in `out`.
-	 *
-	 * Call repeatedly until it returns false: one buffer can hold more
-	 * than one command. */
-	bool feed(const uint8_t *data, size_t len, std::string &out);
+    /* Feed plaintext from one SSL_write. Returns true when a complete
+     * COM_QUERY has been assembled, with its text in `out`.
+     *
+     * Call repeatedly until it returns false: one buffer can hold more
+     * than one command. */
+    bool feed(const uint8_t *data, size_t len, std::string &out);
 
-	/* Continue draining without adding bytes -- the same as feed() with an
-	 * empty buffer, spelled so callers do not have to pass nullptr. */
-	bool next(std::string &out);
+    /* Continue draining without adding bytes -- the same as feed() with an
+     * empty buffer, spelled so callers do not have to pass nullptr. */
+    bool next(std::string &out);
 
-	/* The command byte of the last complete packet seen, COM_QUERY or not.
-	 * Useful for noticing COM_QUIT and COM_STMT_PREPARE. */
-	uint8_t lastCommand() const
-	{
-		return last_cmd;
-	}
+    /* The command byte of the last complete packet seen, COM_QUERY or not.
+     * Useful for noticing COM_QUIT and COM_STMT_PREPARE. */
+    uint8_t lastCommand() const
+    {
+        return last_cmd;
+    }
 
-	/* Sequence id of that packet. A response continues the numbering of
-	 * the command it answers, and the counter restarts per command -- so a
-	 * cached response has to be renumbered for whoever is replaying it. */
-	uint8_t lastSeq() const
-	{
-		return last_seq;
-	}
+    /* Sequence id of that packet. A response continues the numbering of
+     * the command it answers, and the counter restarts per command -- so a
+     * cached response has to be renumbered for whoever is replaying it. */
+    uint8_t lastSeq() const
+    {
+        return last_seq;
+    }
 
-	size_t buffered() const
-	{
-		return reader.buffered();
-	}
+    size_t buffered() const
+    {
+        return reader.buffered();
+    }
 
-	void reset();
+    void reset();
 
 private:
-	mysql::MessageReader reader;
-	uint32_t caps = 0;
-	uint8_t last_cmd = 0;
-	uint8_t last_seq = 0;
+    mysql::MessageReader reader;
+    uint32_t caps = 0;
+    uint8_t last_cmd = 0;
+    uint8_t last_seq = 0;
 };
 
-class ResponseTracker {
+class ResponseTracker
+{
 public:
-	void begin(uint32_t caps);
+    void begin(uint32_t caps);
 
-	/* Feed one reassembled response message. Returns true once the whole
-	 * response has been seen. */
-	bool feed(const mysql::Message &msg);
+    /* Feed one reassembled response message. Returns true once the whole
+     * response has been seen. */
+    bool feed(const mysql::Message &msg);
 
-	bool complete() const
-	{
-		return state_ == State::Done;
-	}
+    bool complete() const
+    {
+        return state_ == State::Done;
+    }
 
-	/* True if anything about this response makes it unsafe or pointless
-	 * to cache: an error, a LOCAL INFILE request, multiple result sets,
-	 * or an open transaction. */
-	bool poisoned() const
-	{
-		return poisoned_;
-	}
+    /* True if anything about this response makes it unsafe or pointless
+     * to cache: an error, a LOCAL INFILE request, multiple result sets,
+     * or an open transaction. */
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
 
-	/* Transaction state reported by the final OK/EOF packet. */
-	bool inTransaction() const
-	{
-		return in_transaction_;
-	}
+    /* Transaction state reported by the final OK/EOF packet. */
+    bool inTransaction() const
+    {
+        return in_transaction_;
+    }
 
 private:
-	enum class State { Init, ColumnDefs, ColumnEof, Rows, Done };
+    enum class State { Init, ColumnDefs, ColumnEof, Rows, Done };
 
-	void finish(const mysql::Message &msg);
+    void finish(const mysql::Message &msg);
 
-	State state_ = State::Init;
-	uint32_t caps_ = 0;
-	uint64_t columns_left_ = 0;
-	bool poisoned_ = false;
-	bool in_transaction_ = false;
+    State state_ = State::Init;
+    uint32_t caps_ = 0;
+    uint64_t columns_left_ = 0;
+    bool poisoned_ = false;
+    bool in_transaction_ = false;
 };
 
 /*
@@ -140,50 +141,48 @@ private:
  * precisely why the handshake is worth parsing rather than skipping.
  */
 struct Connection {
-	uint32_t server_caps = 0;
-	uint32_t caps = 0;
-	bool handshake_done = false;
-	bool tls = false;
+    uint32_t server_caps = 0;
+    uint32_t caps = 0;
+    bool handshake_done = false;
+    bool tls = false;
 
-	/* Set once a transaction is observed; caching stays disabled until it
-	 * ends. Reads inside a transaction may see uncommitted data, and
-	 * caching them would leak one session's view into others. */
-	bool in_transaction = false;
+    /* Set once a transaction is observed; caching stays disabled until it
+     * ends. Reads inside a transaction may see uncommitted data, and
+     * caching them would leak one session's view into others. */
+    bool in_transaction = false;
 
-	/* A response is outstanding for this connection.
-	 *
-	 * Set for EVERY statement, not only cacheable ones. Transaction state
-	 * arrives on the response to whatever opened the transaction --
-	 * typically `START TRANSACTION`, which is not itself cacheable -- so a
-	 * tracker that only ran for cacheable statements would never see the
-	 * IN_TRANS flag and would happily cache reads inside a transaction.
-	 * That is a correctness bug, not an optimization gap: those reads can
-	 * observe uncommitted state private to one session. */
-	bool awaiting_response = false;
+    /* A response is outstanding for this connection.
+     *
+     * Set for EVERY statement, not only cacheable ones. Transaction state
+     * arrives on the response to whatever opened the transaction --
+     * typically `START TRANSACTION`, which is not itself cacheable -- so a
+     * tracker that only ran for cacheable statements would never see the
+     * IN_TRANS flag and would happily cache reads inside a transaction.
+     * That is a correctness bug, not an optimization gap: those reads can
+     * observe uncommitted state private to one session. */
+    bool awaiting_response = false;
 
-	/* The statement in flight, set only when it is one we intend to cache. */
-	std::string pending_query;
-	bool capturing = false;
+    /* The statement in flight, set only when it is one we intend to cache. */
+    std::string pending_query;
+    bool capturing = false;
 
-	mysql::MessageReader response_reader;
-	ResponseTracker tracker;
+    mysql::MessageReader response_reader;
+    ResponseTracker tracker;
 
-	/* Raw response bytes accumulated for a cacheable statement. Stored
-	 * verbatim: MySQL resets the sequence id per command, so a response
-	 * captured at the start of one command replays correctly at the start
-	 * of another, after renumbering. */
-	std::vector<uint8_t> captured;
+    /* Raw response bytes accumulated for a cacheable statement. Stored
+     * verbatim: MySQL resets the sequence id per command, so a response
+     * captured at the start of one command replays correctly at the start
+     * of another, after renumbering. */
+    std::vector<uint8_t> captured;
 
-	void reset()
-	{
-		awaiting_response = false;
-		pending_query.clear();
-		capturing = false;
-		captured.clear();
-		response_reader.reset();
-	}
+    void reset()
+    {
+        awaiting_response = false;
+        pending_query.clear();
+        capturing = false;
+        captured.clear();
+        response_reader.reset();
+    }
 };
 
-} // namespace cache
-
-#endif /* VALKEY_EBPF_CACHE_SESSION_H */
+} // namespace bncl

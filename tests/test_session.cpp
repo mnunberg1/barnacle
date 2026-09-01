@@ -25,18 +25,18 @@
 #include <cstdint>
 #include <vector>
 
-
-namespace {
+namespace
+{
 
 mysql::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1)
 {
-	mysql::Message m;
+    mysql::Message m;
 
-	m.payload = payload;
-	m.first_seq = seq;
-	m.last_seq = seq;
-	m.wire_size = payload.size() + mysql::kHeaderLen;
-	return m;
+    m.payload = payload;
+    m.first_seq = seq;
+    m.last_seq = seq;
+    m.wire_size = payload.size() + mysql::kHeaderLen;
+    return m;
 }
 
 /* What a real connection negotiates. Status flags are only present on the
@@ -47,187 +47,185 @@ const uint32_t kCaps = mysql::CLIENT_PROTOCOL_41 | mysql::CLIENT_TRANSACTIONS;
 /* OK: 0x00, affected_rows (lenenc), last_insert_id (lenenc), status, warnings. */
 std::vector<uint8_t> okPacket(uint16_t status)
 {
-	return { 0x00, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8),
-		 0x00, 0x00 };
+    return {0x00, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8), 0x00, 0x00};
 }
 
 /* EOF, pre-DEPRECATE_EOF form: 0xFE, warnings, status. Exactly five bytes --
  * a different shape from OK, not merely a shorter one. */
 std::vector<uint8_t> eofPacket(uint16_t status)
 {
-	return { 0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8) };
+    return {0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8)};
 }
 
 /* The DEPRECATE_EOF-era terminator: an OK packet wearing an 0xFE header. */
 std::vector<uint8_t> okEofPacket(uint16_t status)
 {
-	return { 0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8),
-		 0x00, 0x00 };
+    return {0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8), 0x00, 0x00};
 }
 
 std::vector<uint8_t> errPacket()
 {
-	return { 0xFF, 0x48, 0x04, '#', 'H', 'Y', '0', '0', '0', 'b', 'o', 'o', 'm' };
+    return {0xFF, 0x48, 0x04, '#', 'H', 'Y', '0', '0', '0', 'b', 'o', 'o', 'm'};
 }
 
 /* A column-count header, then one column definition per column. Contents do
  * not matter to the tracker -- only that a packet arrived. */
 std::vector<uint8_t> columnCount(uint8_t n)
 {
-	return { n };
+    return {n};
 }
 
 std::vector<uint8_t> columnDef()
 {
-	return { 0x03, 'd', 'e', 'f', 0x00 };
+    return {0x03, 'd', 'e', 'f', 0x00};
 }
 
 std::vector<uint8_t> row()
 {
-	return { 0x01, 'x' };
+    return {0x01, 'x'};
 }
 
 /* Drive a whole result set through the tracker and return it for inspection.
  * `caps` decides whether an EOF separates the definitions from the rows. */
-cache::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int ncols, int nrows)
+bncl::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int ncols, int nrows)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(caps);
-	EXPECT_FALSE(t.feed(msg(columnCount((uint8_t)ncols))));
-	for (int i = 0; i < ncols; i++) {
-		EXPECT_FALSE(t.feed(msg(columnDef())));
-	}
-	if (!(caps & mysql::CLIENT_DEPRECATE_EOF)) {
-		EXPECT_FALSE(t.feed(msg(eofPacket(0))));
-	}
-	for (int i = 0; i < nrows; i++) {
-		EXPECT_FALSE(t.feed(msg(row())));
-	}
-	EXPECT_TRUE(t.feed(msg((caps & mysql::CLIENT_DEPRECATE_EOF) ? okEofPacket(final_status)
-							    : eofPacket(final_status))));
-	return t;
+    t.begin(caps);
+    EXPECT_FALSE(t.feed(msg(columnCount((uint8_t)ncols))));
+    for (int i = 0; i < ncols; i++) {
+        EXPECT_FALSE(t.feed(msg(columnDef())));
+    }
+    if (!(caps & mysql::CLIENT_DEPRECATE_EOF)) {
+        EXPECT_FALSE(t.feed(msg(eofPacket(0))));
+    }
+    for (int i = 0; i < nrows; i++) {
+        EXPECT_FALSE(t.feed(msg(row())));
+    }
+    EXPECT_TRUE(t.feed(msg((caps & mysql::CLIENT_DEPRECATE_EOF) ? okEofPacket(final_status)
+                                                                : eofPacket(final_status))));
+    return t;
 }
 
 } // namespace
 
 TEST(Session, SingleOkCompletesAndIsCacheable)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(0);
-	EXPECT_TRUE(t.feed(msg(okPacket(0))));
-	EXPECT_TRUE(t.complete());
-	EXPECT_FALSE(t.poisoned());
-	EXPECT_FALSE(t.inTransaction());
+    t.begin(0);
+    EXPECT_TRUE(t.feed(msg(okPacket(0))));
+    EXPECT_TRUE(t.complete());
+    EXPECT_FALSE(t.poisoned());
+    EXPECT_FALSE(t.inTransaction());
 }
 
 TEST(Session, ErrorIsPoisoned)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(0);
-	EXPECT_TRUE(t.feed(msg(errPacket())));
-	EXPECT_TRUE(t.complete());
-	/* Errors are cheap to reproduce and may be session-specific. */
-	EXPECT_TRUE(t.poisoned());
+    t.begin(0);
+    EXPECT_TRUE(t.feed(msg(errPacket())));
+    EXPECT_TRUE(t.complete());
+    /* Errors are cheap to reproduce and may be session-specific. */
+    EXPECT_TRUE(t.poisoned());
 }
 
 TEST(Session, LocalInfileIsPoisoned)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(0);
-	/* 0xFB introduces a LOCAL INFILE request -- the server asking the
-	 * client for a file. Out of scope, and never cacheable. */
-	EXPECT_TRUE(t.feed(msg({ 0xFB, '/', 't', 'm', 'p', '/', 'f' })));
-	EXPECT_TRUE(t.complete());
-	EXPECT_TRUE(t.poisoned());
+    t.begin(0);
+    /* 0xFB introduces a LOCAL INFILE request -- the server asking the
+     * client for a file. Out of scope, and never cacheable. */
+    EXPECT_TRUE(t.feed(msg({0xFB, '/', 't', 'm', 'p', '/', 'f'})));
+    EXPECT_TRUE(t.complete());
+    EXPECT_TRUE(t.poisoned());
 }
 
 TEST(Session, OpenTransactionIsDetected)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(kCaps);
-	EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_STATUS_IN_TRANS))));
-	EXPECT_TRUE(t.inTransaction());
-	/* Not poisoned as such -- the response is well formed. It is the
-	 * transaction that makes it unsafe to cache, which is the caller's
-	 * decision to make. */
-	EXPECT_FALSE(t.poisoned());
+    t.begin(kCaps);
+    EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_STATUS_IN_TRANS))));
+    EXPECT_TRUE(t.inTransaction());
+    /* Not poisoned as such -- the response is well formed. It is the
+     * transaction that makes it unsafe to cache, which is the caller's
+     * decision to make. */
+    EXPECT_FALSE(t.poisoned());
 }
 
 TEST(Session, MoreResultsExistsIsPoisoned)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(kCaps);
-	/* Only the first set would be captured, so replay would be truncated. */
-	EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_MORE_RESULTS_EXISTS))));
-	EXPECT_TRUE(t.poisoned());
+    t.begin(kCaps);
+    /* Only the first set would be captured, so replay would be truncated. */
+    EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_MORE_RESULTS_EXISTS))));
+    EXPECT_TRUE(t.poisoned());
 }
 
 TEST(Session, ResultSetWithEofSeparator)
 {
-	/* No DEPRECATE_EOF: an EOF packet sits between the column definitions
-	 * and the rows, so the tracker must expect one more packet. */
-	cache::ResponseTracker t = runResultSet(kCaps, 0, 2, 3);
+    /* No DEPRECATE_EOF: an EOF packet sits between the column definitions
+     * and the rows, so the tracker must expect one more packet. */
+    bncl::ResponseTracker t = runResultSet(kCaps, 0, 2, 3);
 
-	EXPECT_TRUE(t.complete());
-	EXPECT_FALSE(t.poisoned());
-	EXPECT_FALSE(t.inTransaction());
+    EXPECT_TRUE(t.complete());
+    EXPECT_FALSE(t.poisoned());
+    EXPECT_FALSE(t.inTransaction());
 }
 
 TEST(Session, ResultSetWithDeprecateEof)
 {
-	/* Same logical response, one fewer packet. Getting this branch wrong
-	 * silently mis-counts every result set on a modern connection. */
-	cache::ResponseTracker t = runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF, 0, 2, 3);
+    /* Same logical response, one fewer packet. Getting this branch wrong
+     * silently mis-counts every result set on a modern connection. */
+    bncl::ResponseTracker t = runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF, 0, 2, 3);
 
-	EXPECT_TRUE(t.complete());
-	EXPECT_FALSE(t.poisoned());
+    EXPECT_TRUE(t.complete());
+    EXPECT_FALSE(t.poisoned());
 }
 
 TEST(Session, ResultSetInTransaction)
 {
-	cache::ResponseTracker t = runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF,
-					 mysql::SERVER_STATUS_IN_TRANS, 1, 1);
+    bncl::ResponseTracker t =
+        runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF, mysql::SERVER_STATUS_IN_TRANS, 1, 1);
 
-	EXPECT_TRUE(t.complete());
-	EXPECT_TRUE(t.inTransaction());
+    EXPECT_TRUE(t.complete());
+    EXPECT_TRUE(t.inTransaction());
 }
 
 TEST(Session, LongFeLedPacketIsARowNotATerminator)
 {
-	/* The overloaded-0xFE trap: a row whose first column value begins with
-	 * 0xFE. Short means terminator, long means data. Treating this as the
-	 * end would truncate the cached response. */
-	cache::ResponseTracker t;
-	std::vector<uint8_t> fat_row(32, 0xAA);
+    /* The overloaded-0xFE trap: a row whose first column value begins with
+     * 0xFE. Short means terminator, long means data. Treating this as the
+     * end would truncate the cached response. */
+    bncl::ResponseTracker t;
+    std::vector<uint8_t> fat_row(32, 0xAA);
 
-	fat_row[0] = 0xFE;
+    fat_row[0] = 0xFE;
 
-	t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
-	EXPECT_FALSE(t.feed(msg(columnCount(1))));
-	EXPECT_FALSE(t.feed(msg(columnDef())));
-	EXPECT_FALSE(t.feed(msg(fat_row)));
-	EXPECT_FALSE(t.complete());
+    t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
+    EXPECT_FALSE(t.feed(msg(columnCount(1))));
+    EXPECT_FALSE(t.feed(msg(columnDef())));
+    EXPECT_FALSE(t.feed(msg(fat_row)));
+    EXPECT_FALSE(t.complete());
 
-	EXPECT_TRUE(t.feed(msg(okEofPacket(0))));
-	EXPECT_TRUE(t.complete());
-	EXPECT_FALSE(t.poisoned());
+    EXPECT_TRUE(t.feed(msg(okEofPacket(0))));
+    EXPECT_TRUE(t.complete());
+    EXPECT_FALSE(t.poisoned());
 }
 
 TEST(Session, ErrorMidResultSetIsPoisoned)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
-	EXPECT_FALSE(t.feed(msg(columnCount(1))));
-	EXPECT_FALSE(t.feed(msg(columnDef())));
-	EXPECT_TRUE(t.feed(msg(errPacket())));
-	EXPECT_TRUE(t.poisoned());
+    t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
+    EXPECT_FALSE(t.feed(msg(columnCount(1))));
+    EXPECT_FALSE(t.feed(msg(columnDef())));
+    EXPECT_TRUE(t.feed(msg(errPacket())));
+    EXPECT_TRUE(t.poisoned());
 }
 
 /*
@@ -240,58 +238,58 @@ TEST(Session, ErrorMidResultSetIsPoisoned)
  */
 TEST(Session, TransactionDetectedFromPlainEofTerminator)
 {
-	cache::ResponseTracker t = runResultSet(kCaps, mysql::SERVER_STATUS_IN_TRANS, 1, 1);
+    bncl::ResponseTracker t = runResultSet(kCaps, mysql::SERVER_STATUS_IN_TRANS, 1, 1);
 
-	EXPECT_TRUE(t.complete());
-	EXPECT_TRUE(t.inTransaction());
+    EXPECT_TRUE(t.complete());
+    EXPECT_TRUE(t.inTransaction());
 }
 
 TEST(Session, FeedAfterDoneIsIdempotent)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(kCaps);
-	EXPECT_TRUE(t.feed(msg(okPacket(0))));
-	/* Trailing packets must not reopen a finished response. */
-	EXPECT_TRUE(t.feed(msg(row())));
-	EXPECT_TRUE(t.complete());
-	EXPECT_FALSE(t.poisoned());
+    t.begin(kCaps);
+    EXPECT_TRUE(t.feed(msg(okPacket(0))));
+    /* Trailing packets must not reopen a finished response. */
+    EXPECT_TRUE(t.feed(msg(row())));
+    EXPECT_TRUE(t.complete());
+    EXPECT_FALSE(t.poisoned());
 }
 
 TEST(Session, BeginResetsPreviousState)
 {
-	cache::ResponseTracker t;
+    bncl::ResponseTracker t;
 
-	t.begin(0);
-	EXPECT_TRUE(t.feed(msg(errPacket())));
-	EXPECT_TRUE(t.poisoned());
+    t.begin(0);
+    EXPECT_TRUE(t.feed(msg(errPacket())));
+    EXPECT_TRUE(t.poisoned());
 
-	/* A connection is reused for statement after statement; stale poison
-	 * would suppress caching for the life of the connection. */
-	t.begin(0);
-	EXPECT_FALSE(t.poisoned());
-	EXPECT_FALSE(t.complete());
-	EXPECT_TRUE(t.feed(msg(okPacket(0))));
-	EXPECT_FALSE(t.poisoned());
+    /* A connection is reused for statement after statement; stale poison
+     * would suppress caching for the life of the connection. */
+    t.begin(0);
+    EXPECT_FALSE(t.poisoned());
+    EXPECT_FALSE(t.complete());
+    EXPECT_TRUE(t.feed(msg(okPacket(0))));
+    EXPECT_FALSE(t.poisoned());
 }
 
 TEST(Connection, ResetClearsPerStatementState)
 {
-	cache::Connection c;
+    bncl::Connection c;
 
-	c.caps = mysql::CLIENT_DEPRECATE_EOF;
-	c.awaiting_response = true;
-	c.capturing = true;
-	c.pending_query = "SELECT 1";
-	c.captured = { 1, 2, 3 };
+    c.caps = mysql::CLIENT_DEPRECATE_EOF;
+    c.awaiting_response = true;
+    c.capturing = true;
+    c.pending_query = "SELECT 1";
+    c.captured = {1, 2, 3};
 
-	c.reset();
+    c.reset();
 
-	EXPECT_FALSE(c.awaiting_response);
-	EXPECT_FALSE(c.capturing);
-	EXPECT_TRUE(c.pending_query.empty());
-	EXPECT_TRUE(c.captured.empty());
-	/* Negotiated capabilities outlive a statement -- they belong to the
-	 * connection, and re-deriving them is impossible once TLS is up. */
-	EXPECT_EQ(c.caps, (uint32_t)mysql::CLIENT_DEPRECATE_EOF);
+    EXPECT_FALSE(c.awaiting_response);
+    EXPECT_FALSE(c.capturing);
+    EXPECT_TRUE(c.pending_query.empty());
+    EXPECT_TRUE(c.captured.empty());
+    /* Negotiated capabilities outlive a statement -- they belong to the
+     * connection, and re-deriving them is impossible once TLS is up. */
+    EXPECT_EQ(c.caps, (uint32_t)mysql::CLIENT_DEPRECATE_EOF);
 }

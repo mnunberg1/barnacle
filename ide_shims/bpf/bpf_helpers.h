@@ -4,8 +4,8 @@
  * includes. Declarations only, no bodies: enough for clangd to type-check
  * call sites, and honest about the fact that none of it can run here.
  */
-#ifndef VALKEY_QCACHE_SHIM_BPF_HELPERS_H
-#define VALKEY_QCACHE_SHIM_BPF_HELPERS_H
+#ifndef BNCL_SHIM_BPF_HELPERS_H
+#define BNCL_SHIM_BPF_HELPERS_H
 
 #include "../vmlinux.h"
 
@@ -29,42 +29,42 @@ extern "C" {
 #define __ulong(name, val) enum name##__##val { name##__value = val } name
 
 enum {
-	BPF_ANY = 0,
-	BPF_NOEXIST = 1,
-	BPF_EXIST = 2,
+        BPF_ANY = 0,
+        BPF_NOEXIST = 1,
+        BPF_EXIST = 2,
 };
 
 /* Redirect flag: deliver into the target socket's INGRESS queue, so bytes
  * look like they arrived from the network. Without it they would be sent out
  * of the socket instead. */
 enum {
-	BPF_F_INGRESS = (1ULL << 0),
+        BPF_F_INGRESS = (1ULL << 0),
 };
 
 /* Only the map types this project declares; real UAPI values. */
 enum bpf_map_type {
-	BPF_MAP_TYPE_HASH = 1,
-	BPF_MAP_TYPE_ARRAY = 2,
-	BPF_MAP_TYPE_PERCPU_ARRAY = 6,
-	BPF_MAP_TYPE_SOCKMAP = 15,
-	BPF_MAP_TYPE_SOCKHASH = 18,
-	BPF_MAP_TYPE_SK_STORAGE = 24,
-	BPF_MAP_TYPE_RINGBUF = 27,
-	BPF_MAP_TYPE_ARENA = 33,
+        BPF_MAP_TYPE_HASH = 1,
+        BPF_MAP_TYPE_ARRAY = 2,
+        BPF_MAP_TYPE_PERCPU_ARRAY = 6,
+        BPF_MAP_TYPE_SOCKMAP = 15,
+        BPF_MAP_TYPE_SOCKHASH = 18,
+        BPF_MAP_TYPE_SK_STORAGE = 24,
+        BPF_MAP_TYPE_RINGBUF = 27,
+        BPF_MAP_TYPE_ARENA = 33,
 };
 
 /* Map creation flags this project uses. Real UAPI values. */
 enum {
-	BPF_F_NO_PREALLOC = (1U << 0),
-	BPF_F_MMAPABLE = (1U << 10),
+        BPF_F_NO_PREALLOC = (1U << 0),
+        BPF_F_MMAPABLE = (1U << 10),
 };
 
 /* libbpf pins the map under its own name in bpffs at load time, and reuses
  * an existing pin if one is there. This is how the daemon and the client
  * processes end up holding the same maps without passing descriptors. */
 enum libbpf_pin_type {
-	LIBBPF_PIN_NONE = 0,
-	LIBBPF_PIN_BY_NAME = 1,
+        LIBBPF_PIN_NONE = 0,
+        LIBBPF_PIN_BY_NAME = 1,
 };
 
 /* --- map access --- */
@@ -121,13 +121,13 @@ long bpf_ringbuf_output(void *ringbuf, void *data, __u64 size, __u64 flags);
 /* --- debug --- */
 long bpf_trace_printk(const char *fmt, __u32 fmt_size, ...);
 #define bpf_printk(fmt, ...)                                                      \
-	({                                                                        \
-		static const char ____fmt[] = fmt;                                \
-		bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);        \
-	})
+        ({                                                                        \
+                static const char ____fmt[] = fmt;                                \
+                bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);        \
+        })
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_BPF_HELPERS_H */
+#endif /* BNCL_SHIM_BPF_HELPERS_H */

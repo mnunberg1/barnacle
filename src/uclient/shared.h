@@ -24,18 +24,28 @@
  * and the application collects it whenever its own event loop comes round --
  * which is the whole reason architecture.txt routes the conversation through
  * the hijacked connection rather than a side channel.
+ *
+ * Reading that answer is a different matter, and is not here: agent.cpp waits
+ * briefly for the verdict, bounded by a deadline, because that is the one
+ * place a wait is unavoidable.
+ *
+ * The one exception below is the freelist lock, which spins. Bounded to
+ * roughly a millisecond and abandoned rather than waited out, because the
+ * cost of failing to take a pipe is one query going to the server, and the
+ * cost of waiting forever is an application hung inside SSL_write for a cache.
  */
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace qcagent {
+namespace bnclagent
+{
 
 /*
  * The capabilities a cached response is stored under.
  *
- * Mirrors QC_CANONICAL_CAPS in common/defs.h. Repeated rather than included
+ * Mirrors BNCL_CANONICAL_CAPS in common/defs.h. Repeated rather than included
  * because defs.h reaches <linux/bpf.h>, which cannot meet frida-gum.h.
  */
 constexpr uint32_t CANONICAL_CAPS = 0x01002200u;
@@ -49,18 +59,64 @@ constexpr uint32_t CANONICAL_CAPS = 0x01002200u;
  * two definitions have not drifted.
  */
 struct Reply {
-	uint8_t status;
-	uint8_t pad[3];
-	uint32_t stmt_id;
+    uint8_t status;
+    uint8_t pad[3];
+    uint32_t stmt_id;
 };
 
 constexpr uint8_t REPLY_OK = 0x01;
 constexpr uint8_t REPLY_WRITE_THROUGH = 0x00;
 constexpr uint8_t REPLY_CACHE_ERROR = 0xff;
 
-/* Map the arena at the address the daemon chose and open the pins. False if
- * the daemon is not running. */
+/*
+ * Map the arena at the address the daemon chose and open the pins. False if
+ * the daemon is not running.
+ *
+ * Safe to call again. It closes what it already had first, which is what a
+ * re-attach after the daemon was restarted needs: the descriptors from the
+ * previous daemon still refer to perfectly valid maps that nobody is reading
+ * any more, and using them would be worse than having none.
+ */
 bool openShared();
+
+/*
+ * Is the daemon still there?
+ *
+ * Answered by whether its pins still exist, because holding a descriptor
+ * proves nothing: a BPF map outlives every pin and every process that made
+ * it, for as long as one descriptor remains open -- and this agent is holding
+ * those descriptors. So a dead daemon leaves the agent with a complete,
+ * readable, permanently unanswered set of maps.
+ *
+ * The daemon removes its pins on the way out, which makes their absence the
+ * signal. Cheap enough to ask on every poll: one stat of a path that is
+ * almost certainly in the dentry cache.
+ */
+bool daemonAlive();
+
+/*
+ * The runtime switches the daemon publishes, read together.
+ *
+ * `client_on` is cleared by `barnacle detach-client`, `generation` is bumped
+ * by `barnacle reload-config`, and `local_on` says whether the arena copy may
+ * be trusted or every lookup has to go to Valkey. Polled rather than pushed:
+ * there is no thread here to receive a notification on, and the agent is only
+ * ever running inside somebody else's SSL_write.
+ *
+ * One struct rather than three out-parameters because they are read together,
+ * in one place, and adding a fourth should not change a signature.
+ */
+struct Switches {
+    uint32_t client_on;
+    uint32_t generation;
+    uint32_t local_on;
+};
+
+/*
+ * False when the daemon is gone or the pin cannot be read, in which case the
+ * caller keeps whatever it last saw.
+ */
+bool cfgRead(Switches &out);
 
 /*
  * The cached response for a statement, if present and unexpired.
@@ -96,4 +152,4 @@ bool askStore(int sock, const std::vector<uint8_t> &canonical);
  * would redirect the connection's next write into the daemon. */
 void release(int sock, uint32_t key);
 
-} // namespace qcagent
+} // namespace bnclagent

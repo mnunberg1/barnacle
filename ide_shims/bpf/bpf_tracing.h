@@ -8,8 +8,8 @@
  * as functions returning an integer wide enough to hold a pointer. Call sites
  * type-check; the values are fiction.
  */
-#ifndef VALKEY_QCACHE_SHIM_BPF_TRACING_H
-#define VALKEY_QCACHE_SHIM_BPF_TRACING_H
+#ifndef BNCL_SHIM_BPF_TRACING_H
+#define BNCL_SHIM_BPF_TRACING_H
 
 #include "../vmlinux.h"
 
@@ -42,4 +42,4 @@ __u64 __shim_pt_regs_param(const struct pt_regs *ctx, int n);
 }
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_BPF_TRACING_H */
+#endif /* BNCL_SHIM_BPF_TRACING_H */

@@ -47,3 +47,56 @@ INSERT INTO orders VALUES
   ('ORD-1004','o''brien, inc.','SKU-006','cancelled',5,63.75),
   ('ORD-1005','wayne industries','SKU-005','shipped',40,399.60),
   ('ORD-1006','tyrell corp','SKU-010','pending',3,104.85);
+
+-- --- where the latency comes from ----------------------------------------
+--
+-- The demo needs some queries to be slow and the rest to be instant. That
+-- rules out the obvious network-level trick: `tc qdisc ... netem delay` on
+-- the server's interface adds the same delay to every packet, so it cannot
+-- make five statements slow and fifteen fast. It is still worth having as a
+-- baseline RTT -- see demo/netem.sh -- but it is not this.
+--
+-- So the latency lives in the SERVER, as a property of the objects being
+-- queried rather than of the query text. Each of these views cross-joins a
+-- one-row derived table containing a SLEEP. The derived table is materialised
+-- exactly once per query, so the cost is paid once -- independent of how many
+-- rows come back, which SLEEP() in a WHERE clause is not: there it runs per
+-- row, and `... AND SLEEP(1.5) = 0` over three rows takes four and a half
+-- seconds.
+--
+-- The delay is RANDOM, between 0.5 and 3 seconds, rather than a flat 1.5.
+-- A fixed delay makes an unrealistically tidy picture: every slow query costs
+-- exactly the same, so the latency histogram is a single spike and the average
+-- never moves. Real slow queries scatter -- plan changes, buffer pool hits and
+-- misses, lock waits, whatever else the server is doing -- and a cache has to
+-- look good against a distribution, not against one number. RAND() is
+-- re-evaluated per execution here, which is why this is in the derived table
+-- and not folded into a constant.
+--
+-- Doing it here rather than in the application also keeps the client honest.
+-- The statements it issues read like ordinary reporting queries, with nothing
+-- in their text that says "this one is slow" -- which is what the queries a
+-- real administrator would put in the cache list look like.
+
+CREATE OR REPLACE VIEW inventory_report AS
+  SELECT p.* FROM products p JOIN (SELECT SLEEP(0.5 + RAND() * 2.5) AS delay) d;
+
+CREATE OR REPLACE VIEW order_history AS
+  SELECT o.* FROM orders o JOIN (SELECT SLEEP(0.5 + RAND() * 2.5) AS delay) d;
+
+CREATE OR REPLACE VIEW brand_rollup AS
+  SELECT p.brand, COUNT(*) AS skus, SUM(p.stock) AS units,
+         AVG(p.price) AS avg_price
+  FROM products p JOIN (SELECT SLEEP(0.5 + RAND() * 2.5) AS delay) d
+  GROUP BY p.brand;
+
+CREATE OR REPLACE VIEW customer_spend AS
+  SELECT o.customer, COUNT(*) AS orders_placed, SUM(o.total) AS spend
+  FROM orders o JOIN (SELECT SLEEP(0.5 + RAND() * 2.5) AS delay) d
+  GROUP BY o.customer;
+
+CREATE OR REPLACE VIEW category_margin AS
+  SELECT p.category, AVG(p.price) AS avg_price, AVG(p.rating) AS avg_rating,
+         SUM(p.stock) AS units
+  FROM products p JOIN (SELECT SLEEP(0.5 + RAND() * 2.5) AS delay) d
+  GROUP BY p.category;

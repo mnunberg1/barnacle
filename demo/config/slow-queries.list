@@ -1,0 +1,15 @@
+# The five slow statements, ready to paste into cache.list.
+#
+# This is the ANSWER, kept beside the demo so you do not have to transcribe it
+# from the client's log. In a real deployment you would arrive at this list by
+# reading the log yourself: the client reports every query over 500ms, and
+# these are the five that show up.
+#
+#   cat demo/config/slow-queries.list >> demo/config/cache.list
+#   barnacle reload-config
+
+SELECT * FROM inventory_report WHERE category = 'safety'
+SELECT * FROM order_history WHERE status = 'shipped'
+SELECT * FROM brand_rollup
+SELECT * FROM customer_spend
+SELECT * FROM category_margin

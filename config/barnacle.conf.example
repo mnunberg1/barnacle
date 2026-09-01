@@ -1,4 +1,4 @@
-# qc-barnacle - what to look for, and where.
+# barnacle - what to cache, where the cache is, and what to attach to.
 #
 # Runs on the host; container processes are visible through /proc like any
 # others, so no container runtime is required.
@@ -13,17 +13,54 @@
 # For a config that works out of the box against the bundled demo
 # environment, see demo/config/barnacle.conf instead.
 
-valkey_host  = 127.0.0.1
-valkey_port  = 6379
+# --- the daemon ----------------------------------------------------------
+#
+# `barnacle start-server` builds the daemon's command line from these.
 
+valkey_host = 127.0.0.1
+valkey_port = 6379
+
+# The statement list, and how long a cached response stays good for. Editing
+# the list and running `barnacle reload-config` is how a change reaches a
+# running daemon and every attached client, with nothing restarted.
+#
+# Global rather than per-target because the daemon owns ONE cache; a list per
+# target would need a daemon per target. A target may still name its own, and
+# start-server falls back to the first one that does.
+statements  = config/cache.list
+ttl         = 60
+
+# Which port counts as MySQL, for classifying connections. A target may
+# override it.
+mysql_port  = 3306
+
+# How many connections may be hijacked at once. Omit for the daemon's own
+# default, which is enough for anything but a large connection pool.
+# pipes     = 64
+
+# There are two cache tiers. Valkey is the shared one. The other is a per-host
+# copy in the BPF arena, which every attached process has mapped, so a hit
+# there is a memory read: no round trip, and no command sent to anybody.
+#
+# Turn it off to send every lookup to Valkey instead. Worth it when the shared
+# copy needs to be the only authority -- an expiry or a delete then takes
+# effect at the next lookup rather than whenever each host's copy ages out --
+# and when you want every hit to be visible in MONITOR. The cost is a round
+# trip on the hot path, and no cache at all while Valkey is unreachable, since
+# there is no longer a local copy to fall back on. That degrades to passing
+# queries through, which is safe.
+#
+# `barnacle reload-config` applies a change to this without restarting.
+# local_cache = off
+
+# --- what to attach to ---------------------------------------------------
+#
 # `comm` is matched exactly (case-insensitively) because it is a short fixed
 # name -- `mysql` must not also match `mysqld`. `cmdline` and `container` are
 # case-insensitive substrings. A target with no matchers at all is rejected,
 # since it would match every process on the host.
+
 [target my-app]
-comm       = python3
-cmdline    = my_app.py
-container  = my-app-container
-mysql_port = 3306
-statements = config/cache.list
-ttl        = 60
+comm      = python3
+cmdline   = my_app.py
+container = my-app-container

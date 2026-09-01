@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/barnacle.iml" filepath="$PROJECT_DIR$/.idea/barnacle.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/valkey-ebpf.iml" filepath="$PROJECT_DIR$/.idea/valkey-ebpf.iml" />
     </modules>
   </component>

@@ -1,26 +1,29 @@
 # Formatting for the C, C++ and eBPF sources.
 #
-# Close to the Linux kernel style the code was already written in -- 8-column
-# indent, braces on their own line for functions, `else` cuddled to the
-# closing brace -- with two deliberate departures, both requested:
+# Close to the Linux kernel style the code was written in -- braces on their
+# own line for functions, `else` cuddled to the closing brace -- with three
+# deliberate departures, all requested:
 #
 #   - spaces, not tabs. Tab width is a per-viewer setting, so a tabbed file
 #     renders differently for different people; spaces render the same
 #     everywhere.
+#   - 4-column indent rather than 8. The kernel's 8 is a deliberate brake on
+#     nesting depth; this code is mostly C++ inside namespaces and classes,
+#     where two levels are gone before any logic starts.
 #   - 100 columns rather than 80. The names here are short by house style,
 #     but the types (std::vector<uint8_t>, struct bpf_map_def) are not, and
 #     80 forces wrapping that hurts more than the width costs.
 #
-# Not applied wholesale to the existing tree: reformatting every file would
-# bury real changes under whitespace. Run it on what you touch.
+# Applied to the whole tree. Run it on what you touch and the diff stays
+# whitespace-free.
 ---
 Language: Cpp
 BasedOnStyle: LLVM
 
 UseTab: Never
-IndentWidth: 8
-TabWidth: 8
-ContinuationIndentWidth: 8
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
 ColumnLimit: 100
 
 # Functions get a brace on their own line; everything else cuddles. This is
@@ -57,6 +60,6 @@ SpaceBeforeParens: ControlStatements
 SortIncludes: CaseSensitive
 IncludeBlocks: Preserve
 
-AccessModifierOffset: -8
+AccessModifierOffset: -4
 NamespaceIndentation: None
 FixNamespaceComments: true

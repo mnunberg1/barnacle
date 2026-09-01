@@ -6,8 +6,8 @@
  * BPF-program-side functions of the same names. bpf_map_update_elem() here
  * takes an fd; there it takes a map pointer.
  */
-#ifndef VALKEY_QCACHE_SHIM_BPF_BPF_H
-#define VALKEY_QCACHE_SHIM_BPF_BPF_H
+#ifndef BNCL_SHIM_BPF_BPF_H
+#define BNCL_SHIM_BPF_BPF_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -27,9 +27,9 @@ extern "C" {
 #endif
 
 enum {
-	BPF_ANY = 0,
-	BPF_NOEXIST = 1,
-	BPF_EXIST = 2,
+        BPF_ANY = 0,
+        BPF_NOEXIST = 1,
+        BPF_EXIST = 2,
 };
 
 int bpf_map_lookup_elem(int fd, const void *key, void *value);
@@ -41,23 +41,23 @@ int bpf_map_get_next_key(int fd, const void *key, void *next_key);
  * tell which fields a caller was compiled against. LIBBPF_OPTS fills that in;
  * the real macro wraps a statement expression, which this does not need. */
 struct bpf_map_create_opts {
-	size_t sz;
-	__u32 btf_fd;
-	__u32 btf_key_type_id;
-	__u32 btf_value_type_id;
-	__u32 map_flags;
-	__u64 map_extra;
+        size_t sz;
+        __u32 btf_fd;
+        __u32 btf_key_type_id;
+        __u32 btf_value_type_id;
+        __u32 map_flags;
+        __u64 map_extra;
 };
 
 #define LIBBPF_OPTS(TYPE, NAME, ...) \
-	struct TYPE NAME = { .sz = sizeof(struct TYPE), __VA_ARGS__ }
+        struct TYPE NAME = { .sz = sizeof(struct TYPE), __VA_ARGS__ }
 
 int bpf_map_create(enum bpf_map_type map_type, const char *name, __u32 key_size,
-		    __u32 value_size, __u32 max_entries,
-		    const struct bpf_map_create_opts *opts);
+                    __u32 value_size, __u32 max_entries,
+                    const struct bpf_map_create_opts *opts);
 
 int bpf_prog_attach(int prog_fd, int attachable_fd, enum bpf_attach_type type,
-		     unsigned int flags);
+                     unsigned int flags);
 int bpf_prog_detach2(int prog_fd, int attachable_fd, enum bpf_attach_type type);
 
 /* bpffs pins: how a process that did not create a map gets a descriptor for
@@ -70,4 +70,4 @@ int bpf_obj_get(const char *pathname);
 }
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_BPF_BPF_H */
+#endif /* BNCL_SHIM_BPF_BPF_H */

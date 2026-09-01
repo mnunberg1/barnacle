@@ -7,8 +7,8 @@
  * from a 16-bit sockaddr_in::sin_port. Mixing the two produces keys that
  * never match and a redirect that silently does nothing.
  */
-#ifndef VALKEY_QCACHE_SHIM_BPF_ENDIAN_H
-#define VALKEY_QCACHE_SHIM_BPF_ENDIAN_H
+#ifndef BNCL_SHIM_BPF_ENDIAN_H
+#define BNCL_SHIM_BPF_ENDIAN_H
 
 #include "../vmlinux.h"
 
@@ -25,4 +25,4 @@ __u32 bpf_ntohl(__u32 x);
 }
 #endif
 
-#endif /* VALKEY_QCACHE_SHIM_BPF_ENDIAN_H */
+#endif /* BNCL_SHIM_BPF_ENDIAN_H */

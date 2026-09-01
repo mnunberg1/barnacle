@@ -1,0 +1,1314 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""barnacle - the query cache's front door.
+
+Barnacle is the part an administrator actually types at. It owns the daemon's
+lifecycle, decides WHERE the cache attaches, and carries configuration changes
+out to everything already running:
+
+    barnacle start-server     start the daemon
+    barnacle stop-server      stop it
+    barnacle attach-client    attach the agent to the configured programs
+    barnacle detach-client    undo every attachment
+    barnacle reload-config    re-read the config; tell the daemon and agents
+    barnacle status           what is running, and what it has done
+
+    barnacle list             which processes match, and their verdicts
+    barnacle analyze          as above, with the reasoning for each verdict
+
+The two halves talk over different channels because they are different kinds
+of thing. The daemon is one long-lived process with a control socket, so
+start, stop, reload and status are a request and an answer. The agents are
+code running inside somebody else's process with no thread of their own, so
+they are reached by injection (to hook or unhook) and by two values in a BPF
+map that they poll (to be told the list changed, or to stop intercepting).
+
+Barnacle looks at /proc, works out which processes match the config and
+whether each can actually be hooked, and then shells out to bncl-inject for the
+ones that can.
+
+It reads /proc, matches strings, writes a socket and runs a subprocess. There
+is no reason for that to be C++ -- it does no protocol work, touches no BPF
+map, and is not on any hot path. Python keeps it readable and keeps the C++
+confined to the components that genuinely need it (the daemon, the injected
+agent, the eBPF). Nothing here needs bpftool or libbpf, which is what lets it
+run on a host that has no toolchain: every effect on a BPF map goes through
+the daemon, which already has one.
+
+Discovery looks straight at /proc rather than asking a container runtime.
+Given the host PID namespace, processes inside containers appear there like
+any other -- a container is a cgroup and some namespaces, not a separate
+process table -- so this works the same under docker, podman and containerd,
+and on a bare host.
+
+Deciding whether an attach would WORK is the useful half, because several
+things have to line up and each has silently broken this project before:
+
+  - a TLS library has to be mapped, and it has to be OpenSSL. Go and Java do
+    TLS in-process, with no libssl to hook at all.
+  - the symbols matter, not just the library. The mysql CLI calls
+    SSL_read/SSL_write; CPython's _ssl calls only the _ex variants. Hooking
+    one family attaches cleanly to a process using the other and then never
+    fires -- indistinguishable from "the cache does not work".
+  - libssl is usually dlopen'd on first use, so a valid target looks empty
+    until it has connected at least once.
+  - and there has to be a live connection to the database, or there is
+    nothing to cache.
+
+Saying which of those failed is the difference between a useful tool and one
+that reports success and does nothing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+PROC = "/proc"
+
+# Mirrors BNCL_RUN_DIR in src/common/defs.h. Everything barnacle and the daemon
+# share outside the BPF maps lives here: the control socket, the pid file, the
+# daemon's log, and the list of processes we attached to.
+RUN_DIR = os.environ.get("BNCL_RUN_DIR", "/run/barnacle")
+
+# Verdicts, and the actionable explanation for each. A bare enum name is not
+# useful; these are the things that actually go wrong.
+ATTACHABLE = "attachable"
+NO_TLS = "no-tls-library"
+UNSUPPORTED_TLS = "unsupported-tls"
+NO_SYMBOLS = "no-ssl-symbols"
+NO_DB_CONN = "no-database-conn"
+
+EXPLAIN = {
+    NO_TLS: (
+        "no TLS library mapped yet. Usually means the process has not opened\n"
+        "      a connection -- libssl is normally dlopen'd on first use.\n"
+        "      Re-run once it has connected."
+    ),
+    UNSUPPORTED_TLS: (
+        "mapped TLS library has no OpenSSL entry points to hook.\n"
+        "      Go and Java do TLS in-process and are out of scope."
+    ),
+    NO_SYMBOLS: (
+        "libssl is mapped but exports neither SSL_read/SSL_write nor the _ex\n"
+        "      variants -- likely stripped or statically linked."
+    ),
+    NO_DB_CONN: (
+        "attachable, but no established connection to the database port.\n"
+        "      Nothing to cache until it talks to the database."
+    ),
+}
+
+
+# --- config ---------------------------------------------------------------
+#
+# Plain `key = value` in `[section]` blocks. No YAML or JSON dependency for
+# something this small, and it stays readable in a diff.
+
+
+class Target:
+    def __init__(self, name):
+        self.name = name
+        self.comm = ""
+        self.cmdline = ""
+        self.container = ""
+        self.mysql_port = 3306
+        self.statements = ""
+        self.ttl = 60
+
+    def matches_nothing(self):
+        return not (self.comm or self.cmdline or self.container)
+
+
+class Config:
+    def __init__(self):
+        self.targets = []
+        self.valkey_host = "valkey"
+        self.valkey_port = 6379
+        # Daemon settings. `statements` is global because the daemon owns ONE
+        # cache: per-target lists would need per-target daemons. A target may
+        # still name its own, and start-server falls back to the first one
+        # that does, so the older per-target form keeps working.
+        self.statements = ""
+        self.ttl = 60
+        self.pipes = 0
+        self.mysql_port = 3306
+        # Whether the local (arena) tier may answer. Off sends every lookup
+        # to Valkey: slower, but the shared copy becomes the only authority
+        # and every hit shows up in MONITOR. See BNCL_CFG_LOCAL_ON in
+        # src/common/defs.h for the full trade.
+        self.local_cache = True
+
+    def stmt_list(self):
+        """The statement list to run the daemon against.
+
+        Global first, then the first target that names one -- the per-target
+        form predates the global key and still works, but the daemon owns a
+        single cache, so only one list can win.
+        """
+        if self.statements:
+            return self.statements
+        for t in self.targets:
+            if t.statements:
+                return t.statements
+        return ""
+
+
+def parse_bool(val):
+    """`on`/`off`, and the spellings people reach for instead."""
+    low = val.strip().lower()
+    if low in ("on", "yes", "true", "1", "enabled"):
+        return True
+    if low in ("off", "no", "false", "0", "disabled"):
+        return False
+    raise ValueError(val)
+
+
+GLOBAL_KEYS = {
+    "valkey_host": str,
+    "valkey_port": int,
+    "statements": str,
+    "ttl": int,
+    "pipes": int,
+    "mysql_port": int,
+    "local_cache": parse_bool,
+}
+
+
+def load_config(path):
+    """Parse the config file. Raises ValueError with a line number on error."""
+    cfg = Config()
+    cur = None
+
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+
+            if line.startswith("[") and line.endswith("]"):
+                inner = line[1:-1].strip()
+                if not inner.startswith("target "):
+                    raise ValueError("%s:%d: unknown section %r" % (path, lineno, inner))
+                cur = Target(inner[len("target "):].strip())
+                cur.mysql_port = cfg.mysql_port
+                cur.ttl = cfg.ttl
+                cfg.targets.append(cur)
+                continue
+
+            if "=" not in line:
+                raise ValueError("%s:%d: expected key = value" % (path, lineno))
+            key, val = (p.strip() for p in line.split("=", 1))
+
+            if cur is None:
+                conv = GLOBAL_KEYS.get(key)
+                if conv is None:
+                    raise ValueError("%s:%d: unknown key %r" % (path, lineno, key))
+                try:
+                    setattr(cfg, key, conv(val))
+                except ValueError:
+                    what = "on or off" if conv is parse_bool else "a number"
+                    raise ValueError("%s:%d: %r is not %s"
+                                     % (path, lineno, val, what))
+                continue
+
+            if key in ("comm", "cmdline", "container", "statements"):
+                setattr(cur, key, val)
+            elif key == "mysql_port":
+                cur.mysql_port = int(val)
+            elif key == "ttl":
+                cur.ttl = int(val)
+            elif key in GLOBAL_KEYS:
+                # Everything after a [target] header belongs to that target,
+                # so a global key written at the bottom of the file is not a
+                # typo but a placement mistake -- and one that reads as
+                # correct. Say which it is.
+                raise ValueError(
+                    "%s:%d: %r is a global setting and has to appear BEFORE "
+                    "the first [target] section; here it is read as a "
+                    "setting of target %r" % (path, lineno, key, cur.name))
+            else:
+                raise ValueError("%s:%d: unknown key %r" % (path, lineno, key))
+
+    # A target with no matchers would match every process on the host. Reject
+    # it here rather than discovering that by attaching to init.
+    for t in cfg.targets:
+        if t.matches_nothing():
+            raise ValueError("target %r has no matchers" % t.name)
+    if not cfg.targets:
+        raise ValueError("%s: no targets defined" % path)
+    return cfg
+
+
+# --- talking to the daemon ------------------------------------------------
+#
+# One Unix socket, four verbs, a line of text back. This is barnacle's only
+# way to touch a BPF map: the daemon already has libbpf mapped and the right
+# descriptors open, and routing through it is what keeps this script runnable
+# on a host with no toolchain at all.
+
+
+CTL_SOCK = os.path.join(RUN_DIR, "daemon.sock")
+PID_FILE = os.path.join(RUN_DIR, "daemon.pid")
+LOG_FILE = os.path.join(RUN_DIR, "daemon.log")
+# Which processes we injected into. Barnacle is the only thing that knows --
+# an attached agent has no way to announce itself, and the daemon sees dpipe
+# traffic rather than clients.
+ATTACHED = os.path.join(RUN_DIR, "attached")
+
+
+def ctl(cmd, timeout=5.0):
+    """Send one command. Returns the reply, or None if nobody is listening."""
+    try:
+        sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sk.settimeout(timeout)
+        sk.connect(CTL_SOCK)
+    except OSError:
+        return None
+    try:
+        sk.sendall(cmd.encode("utf-8"))
+        chunks = []
+        while True:
+            b = sk.recv(65536)
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks).decode("utf-8", "replace")
+    except OSError:
+        return None
+    finally:
+        sk.close()
+
+
+def daemon_stats():
+    """The daemon's `key value` report as a dict, or None if it is not up."""
+    txt = ctl("STATS")
+    if txt is None:
+        return None
+    out = {}
+    for line in txt.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            out[parts[0]] = parts[1]
+    return out
+
+
+def daemon_running():
+    return ctl("PING") is not None
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError as e:
+        return e.errno == errno.EPERM
+    return True
+
+
+def read_attached():
+    """Recorded attachments whose process still exists.
+
+    Each is (pid, comm, when) -- `when` being the wall-clock time we injected,
+    which is what lets stale_attachments() below notice that the daemon has
+    been restarted since. A pid that has gone is just gone.
+    """
+    out = []
+    for line in read_file(ATTACHED).decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if not parts or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        if not alive(pid):
+            continue
+        comm = parts[1] if len(parts) > 1 else read_comm(pid)
+        try:
+            when = float(parts[2]) if len(parts) > 2 else 0.0
+        except ValueError:
+            when = 0.0
+        out.append((pid, comm, when))
+    return out
+
+
+def write_attached(entries):
+    os.makedirs(RUN_DIR, exist_ok=True)
+    with open(ATTACHED, "w", encoding="utf-8") as fh:
+        for pid, comm, when in entries:
+            fh.write("%d %s %.0f\n" % (pid, comm, when))
+
+
+def stale_attachments(st, entries):
+    """Attachments made before the daemon now running was started.
+
+    An injected agent opens the daemon's pins once, at injection. Restart the
+    daemon and it makes NEW maps; the agent is still holding descriptors to
+    the old ones, which remain perfectly readable and which nobody is serving.
+    The agent notices -- the pins it opened are gone -- and deliberately stops
+    intercepting rather than talking to a daemon that is not there. It stays
+    stopped, because only being injected again can reopen anything.
+
+    That is the right behaviour and it is invisible: the process is still
+    running, still has our library mapped, and still shows up as attached. So
+    barnacle works it out instead, from two numbers it already has -- when it
+    injected, and how long the daemon has been up.
+    """
+    if not st or not entries:
+        return []
+    try:
+        started = time.time() - float(st.get("uptime", 0))
+    except ValueError:
+        return []
+    return [e for e in entries if e[2] < started]
+
+
+def warn_stale(stale):
+    if not stale:
+        return
+    print("\nwarning: %d attached client(s) predate the running daemon and are\n"
+          "         no longer intercepting. An agent opens the daemon's maps once,\n"
+          "         at injection; this daemon made new ones. Re-attach them:\n"
+          "             barnacle attach-client" % len(stale), file=sys.stderr)
+    for pid, comm, _ in stale:
+        print("         pid %-7d %s" % (pid, comm), file=sys.stderr)
+
+
+# --- reading /proc --------------------------------------------------------
+
+
+def read_file(path, limit=1 << 20):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(limit)
+    except OSError:
+        return b""
+
+
+def read_comm(pid):
+    return read_file("%s/%d/comm" % (PROC, pid), 4096).decode("utf-8", "replace").strip()
+
+
+def read_cmdline(pid):
+    # NUL-separated; the trailing NUL leaves an empty final field.
+    raw = read_file("%s/%d/cmdline" % (PROC, pid), 65536)
+    return " ".join(raw.decode("utf-8", "replace").split("\0")).strip()
+
+
+CGROUP_ID = re.compile(r"(?:docker[-/]|libpod-|cri-containerd[-:])([0-9a-f]{12,64})")
+
+
+def read_container(pid):
+    """Recover a container id from the process's cgroup, if it has one.
+
+    Returns (id, kind). Empty id means the process is on the host, or that its
+    cgroup path says nothing -- which is what happens when we ourselves run in
+    a cgroup namespace rather than on the host.
+    """
+    txt = read_file("%s/%d/cgroup" % (PROC, pid), 65536).decode("utf-8", "replace")
+    for line in txt.splitlines():
+        m = CGROUP_ID.search(line)
+        if m:
+            cid = m.group(1)
+            kind = "podman" if "libpod-" in line else "docker"
+            if "cri-containerd" in line:
+                kind = "containerd"
+            return cid, kind
+    return "", "host"
+
+
+def in_cgroup_namespace():
+    """True when our own cgroup path tells us nothing.
+
+    A container that has its own cgroup namespace sees `0::/` for everything,
+    including itself, so no container id can be recovered from /proc for ANY
+    process -- ours or a target's. That is the normal case when barnacle runs
+    inside a container rather than on the host.
+    """
+    txt = read_file("%s/self/cgroup" % PROC, 65536).decode("utf-8", "replace")
+    for line in txt.splitlines():
+        if CGROUP_ID.search(line):
+            return False
+    return True
+
+
+def container_names():
+    """Map container id -> name, best effort.
+
+    Only so the report can say `bncl-ctl` instead of a 64-character hash.
+    Discovery itself never needs this, so a missing or failing docker CLI is
+    not an error.
+    """
+    names = {}
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--no-trunc", "--format", "{{.ID}} {{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return names
+    if out.returncode != 0:
+        return names
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            names[parts[0]] = parts[1]
+    return names
+
+
+def detect_tls(pid):
+    """Which TLS library the process has mapped. Returns (kind, path)."""
+    maps = read_file("%s/%d/maps" % (PROC, pid), 4 << 20).decode("utf-8", "replace")
+    found = ("none", "")
+
+    for line in maps.splitlines():
+        # The path is the last field, and only absolute paths are files.
+        parts = line.rsplit(" ", 1)
+        if len(parts) != 2:
+            continue
+        path = parts[1].strip()
+        if not path.startswith("/"):
+            continue
+
+        if "libssl.so" in path:
+            return "openssl", path  # supported: stop here
+        if "libgnutls.so" in path:
+            found = ("gnutls", path)
+        elif "libnss3.so" in path or "libssl3.so" in path:
+            found = ("nss", path)
+    return found
+
+
+def detect_symbols(pid, libssl_path):
+    """Which SSL entry-point families the mapped library exports.
+
+    Read through /proc/<pid>/root so a path that only exists inside the
+    container still resolves from the host.
+
+    A plain byte scan for the symbol names, rather than parsing .dynsym: crude,
+    but it needs no ELF library, works for both ELF classes, and only ever
+    answers a yes/no question.
+    """
+    if not libssl_path:
+        return False, False
+    blob = read_file("%s/%d/root%s" % (PROC, pid, libssl_path), 16 << 20)
+    if not blob:
+        return False, False
+    classic = b"SSL_read" in blob and b"SSL_write" in blob
+    ex = b"SSL_read_ex" in blob and b"SSL_write_ex" in blob
+    return classic, ex
+
+
+def socket_inodes(pid):
+    inodes = set()
+    fddir = "%s/%d/fd" % (PROC, pid)
+    try:
+        entries = os.listdir(fddir)
+    except OSError:
+        return inodes
+    for e in entries:
+        try:
+            link = os.readlink(os.path.join(fddir, e))
+        except OSError:
+            continue
+        if link.startswith("socket:["):
+            inodes.add(link[len("socket:["):-1])
+    return inodes
+
+
+TCP_ESTABLISHED = "01"
+
+
+def count_db_connections(pid, port):
+    """Established TCP connections from this process to `port`.
+
+    Matched by inode: /proc/<pid>/fd gives the process's socket inodes, and
+    /proc/<pid>/net/tcp lists connections in ITS network namespace. Reading the
+    per-process net/tcp rather than the host's is what makes this correct for
+    containers, which usually have their own.
+    """
+    inodes = socket_inodes(pid)
+    if not inodes:
+        return 0
+
+    count = 0
+    for proto in ("tcp", "tcp6"):
+        txt = read_file("%s/%d/net/%s" % (PROC, pid, proto), 4 << 20)
+        for line in txt.decode("utf-8", "replace").splitlines()[1:]:
+            f = line.split()
+            if len(f) < 10 or f[3] != TCP_ESTABLISHED:
+                continue
+            rem = f[2].rsplit(":", 1)
+            if len(rem) != 2 or int(rem[1], 16) != port:
+                continue
+            if f[9] in inodes:
+                count += 1
+    return count
+
+
+# --- discovery ------------------------------------------------------------
+
+
+class Process:
+    def __init__(self, pid):
+        self.pid = pid
+        self.comm = ""
+        self.cmdline = ""
+        self.container = ""
+        self.container_kind = "host"
+        self.tls = "none"
+        self.libssl_path = ""
+        self.has_classic = False
+        self.has_ex = False
+        self.db_connections = 0
+        self.verdict = NO_TLS
+        self.target = None
+        # A container filter was configured but could not be checked; see
+        # discover().
+        self.container_unattributable = False
+
+    @property
+    def where(self):
+        if self.container:
+            return self.container
+        return "?" if self.container_unattributable else "host"
+
+    @property
+    def symbols(self):
+        if self.has_classic and self.has_ex:
+            return "both"
+        if self.has_classic:
+            return "classic"
+        if self.has_ex:
+            return "_ex"
+        return "-"
+
+
+def ci_contains(hay, needle):
+    """Case-insensitive substring match; an empty needle matches anything."""
+    return needle.lower() in hay.lower() if needle else True
+
+
+def ci_equals(hay, needle):
+    """Case-insensitive exact match; an empty needle matches anything.
+
+    Used for comm, which is a short fixed name rather than a phrase. Substring
+    matching there is actively wrong: `comm = mysql` would also match mysqld,
+    so a config meaning "the mysql CLI" would try to attach to the server.
+    """
+    return hay.lower() == needle.lower() if needle else True
+
+
+def discover(cfg):
+    names = container_names()
+    # When no process can be attributed to a container, a container filter
+    # cannot be applied. Ignoring it would silently attach to things the
+    # config did not ask for; honouring it would match nothing at all and
+    # look like "no such process". Match, and say so in the report.
+    blind = in_cgroup_namespace()
+    out = []
+
+    for entry in sorted(os.listdir(PROC)):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == os.getpid():
+            continue
+
+        comm = read_comm(pid)
+        if not comm:
+            continue  # exited between listdir and read
+        cmdline = read_cmdline(pid)
+        cid, kind = read_container(pid)
+        cname = names.get(cid, cid[:12] if cid else "")
+
+        for t in cfg.targets:
+            if not ci_equals(comm, t.comm):
+                continue
+            if not ci_contains(cmdline, t.cmdline):
+                continue
+            # Match the container by name or by id prefix, so either works.
+            if t.container and not blind and not (
+                ci_contains(cname, t.container) or cid.startswith(t.container)
+            ):
+                continue
+
+            p = Process(pid)
+            p.comm, p.cmdline = comm, cmdline
+            p.container, p.container_kind = cname, kind
+            p.container_unattributable = bool(t.container) and blind
+            p.target = t
+            out.append(p)
+            break
+    return out
+
+
+def analyse(p):
+    p.tls, p.libssl_path = detect_tls(p.pid)
+
+    if p.tls == "none":
+        p.verdict = NO_TLS
+        return
+    if p.tls != "openssl":
+        p.verdict = UNSUPPORTED_TLS
+        return
+
+    p.has_classic, p.has_ex = detect_symbols(p.pid, p.libssl_path)
+    if not (p.has_classic or p.has_ex):
+        p.verdict = NO_SYMBOLS
+        return
+
+    p.db_connections = count_db_connections(p.pid, p.target.mysql_port)
+    p.verdict = ATTACHABLE if p.db_connections else NO_DB_CONN
+
+
+# --- attaching ------------------------------------------------------------
+
+
+def find_tool(name):
+    """Where a built component lives.
+
+    Prefer one next to this script's build output, so running from a source
+    tree works without installing anything; fall back to PATH.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (
+        os.path.join(here, name),
+        os.path.join(here, "..", "build", name),
+        os.path.join(os.getcwd(), "build", name),
+    ):
+        cand = os.path.normpath(cand)
+        # X_OK for the shared object too: the agent is staged into another
+        # container and dlopen'd there, and a mode that lost the execute bit
+        # on the way in fails at load time inside somebody else's process.
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return name
+
+
+def inject_path():
+    return find_tool("bncl-inject")
+
+
+def daemon_path():
+    return find_tool("bncl-daemon")
+
+
+def agent_path():
+    return find_tool("libbnclagent.so")
+
+
+def same_mount_ns(pid):
+    """Does this process see the same filesystem we do?
+
+    Compared by the mount namespace rather than by probing paths: two
+    namespaces can agree about a path and disagree about the file behind it,
+    which is exactly the case that would go wrong silently.
+    """
+    try:
+        return os.readlink("%s/self/ns/mnt" % PROC) == os.readlink(
+            "%s/%d/ns/mnt" % (PROC, pid)
+        )
+    except OSError:
+        return True  # cannot tell; assume shared, which is the common case
+
+
+# Where staged files land inside a target that does not share our filesystem.
+STAGE_DIR = "/tmp/.barnacle"
+
+
+def stage(pid, src, name):
+    """Put a file where the TARGET can open it, and return the path to use.
+
+    The agent and the statement list are both opened in the target's mount
+    namespace. When the target is in another container that is a different
+    filesystem, and the path we hold means nothing there.
+
+    /proc/<pid>/root is the way across: it is the target's root as seen from
+    here, so writing through it puts the file in the target's filesystem, at a
+    path the target can name. No volume has to be shared, and the application
+    stays sealed -- it is handed a file, not mounted into our tree.
+
+    The copy under our OWN root is not redundant. Injection reads the library
+    here, in this process, and then has the target dlopen the same path
+    string, so that one string has to name the file on both sides. Two copies
+    at one path is the simplest way to arrange that -- and using the same path
+    every time is what makes detaching work later, since dlopen keys its
+    handle on the path and a second, differently-named copy would load a
+    second agent rather than reaching the one already there.
+    """
+    src = os.path.abspath(src)
+    if same_mount_ns(pid):
+        return src
+
+    ours = os.path.join(STAGE_DIR, name)
+    theirs = os.path.join("%s/%d/root" % (PROC, pid), STAGE_DIR.lstrip("/"), name)
+    try:
+        for dst in (ours, theirs):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            # Not copied if it is already the right bytes: the agent is tens
+            # of megabytes, and attach, detach and reload all stage it.
+            if not same_bytes(src, dst):
+                shutil.copyfile(src, dst)
+                os.chmod(dst, 0o755)
+    except OSError as e:
+        print("      cannot stage %s into pid %d: %s" % (name, pid, e),
+              file=sys.stderr)
+        return src  # try our own path; it may still resolve there
+    return ours
+
+
+def same_bytes(a, b):
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except OSError:
+        return False
+    if sa.st_size != sb.st_size:
+        return False
+    return read_file(a, 1 << 30) == read_file(b, 1 << 30)
+
+
+def run_inject(pid, agent, data, verbose):
+    """Shell out to bncl-inject.
+
+    A subprocess rather than a library call: injection maps the agent into the
+    target, and doing that from inside our own address space is not the
+    supported path.
+    """
+    cmd = [inject_path(), str(pid), agent, data]
+    try:
+        r = subprocess.run(cmd, capture_output=not verbose, text=True, timeout=120)
+    except FileNotFoundError:
+        print("      bncl-inject not found (try ./build)", file=sys.stderr)
+        return False
+    except subprocess.SubprocessError as e:
+        print("      inject failed for pid %d: %s" % (pid, e), file=sys.stderr)
+        return False
+    if r.returncode == 0:
+        return True
+    if not verbose and r.stderr:
+        print("      %s" % r.stderr.strip().splitlines()[-1], file=sys.stderr)
+    return False
+
+
+def attach_one(p, stmt_list, dry_run, verbose):
+    if dry_run:
+        print("      [dry-run] would attach the agent to pid %d" % p.pid)
+        return True
+
+    agent = stage(p.pid, agent_path(), "libbnclagent.so")
+    listfile = stage(p.pid, stmt_list, "cache.list") if stmt_list else ""
+
+    if not run_inject(p.pid, agent, listfile, verbose):
+        print("      attach failed for pid %d" % p.pid, file=sys.stderr)
+        return False
+    print("      attached the agent to pid %d" % p.pid)
+    return True
+
+
+def detach_one(pid, comm, dry_run, verbose):
+    """Undo one attachment.
+
+    Injects the same library a second time with "detach", which runs the
+    agent's entry point again in the copy that is already loaded and puts
+    every hooked function back. The library stays mapped: unloading it would
+    free trampolines the process may be executing at that instant.
+    """
+    if dry_run:
+        print("      [dry-run] would detach the agent from pid %d" % pid)
+        return True
+
+    agent = stage(pid, agent_path(), "libbnclagent.so")
+
+    if not run_inject(pid, agent, "detach", verbose):
+        print("      detach failed for pid %d (%s)" % (pid, comm), file=sys.stderr)
+        return False
+    print("      detached the agent from pid %d (%s)" % (pid, comm))
+    return True
+
+
+# --- reporting ------------------------------------------------------------
+
+ROW = "%-7s %-14s %-16s %-8s %-8s %-6s %s"
+
+
+def report(procs, explain):
+    print(ROW % ("PID", "COMM", "WHERE", "TLS", "SYMBOLS", "CONNS", "VERDICT"))
+    print(ROW % ("-" * 7, "-" * 14, "-" * 16, "-" * 8, "-" * 8, "-" * 6, "-" * 16))
+
+    for p in procs:
+        print(ROW % (p.pid, p.comm[:14], p.where[:16], p.tls, p.symbols,
+                     p.db_connections, p.verdict))
+        if not explain:
+            continue
+        if p.verdict == ATTACHABLE:
+            print("      ready: %s, %d connection(s) to port %d"
+                  % (p.libssl_path, p.db_connections, p.target.mysql_port))
+        else:
+            print("      " + EXPLAIN[p.verdict])
+
+    if not procs:
+        print("(no processes matched the config)")
+        return
+
+    if any(p.container_unattributable for p in procs):
+        print("\nWHERE is '?' for processes whose container could not be "
+              "determined: this\nprocess is in a cgroup namespace, so /proc "
+              "reports no container for anything.\nThe config's `container` "
+              "filter could not be applied to those rows. Run barnacle\non "
+              "the host to filter by container.")
+
+
+# --- the daemon's lifecycle -----------------------------------------------
+
+
+def read_pid():
+    txt = read_file(PID_FILE, 64).decode("utf-8", "replace").strip()
+    return int(txt) if txt.isdigit() else 0
+
+
+def daemon_argv(cfg, args):
+    argv = [daemon_path()]
+    stmts = cfg.stmt_list()
+    if stmts:
+        argv += ["-l", stmts]
+    argv += ["-H", cfg.valkey_host, "-P", str(cfg.valkey_port)]
+    argv += ["-m", str(cfg.mysql_port), "-t", str(cfg.ttl)]
+    argv += ["-s", CTL_SOCK]
+    if cfg.pipes:
+        argv += ["-n", str(cfg.pipes)]
+    if not cfg.local_cache:
+        argv.append("-R")
+    if args.verbose:
+        argv.append("-v")
+    return argv
+
+
+def cmd_start_server(cfg, args):
+    if daemon_running():
+        print("daemon already running (pid %s)" % daemon_stats().get("pid", "?"))
+        return 0
+
+    stmts = cfg.stmt_list()
+    if not stmts:
+        print("barnacle: no statement list configured", file=sys.stderr)
+        return 1
+    if not os.path.isfile(stmts):
+        print("barnacle: no such statement list: %s" % stmts, file=sys.stderr)
+        return 1
+
+    argv = daemon_argv(cfg, args)
+    if args.dry_run:
+        print("[dry-run] would run: %s" % " ".join(argv))
+        return 0
+
+    os.makedirs(RUN_DIR, exist_ok=True)
+    # Appended, not truncated: the log of the run that just failed to start is
+    # the only evidence of why, and starting again must not erase it.
+    log = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+    log.write("\n--- %s: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(argv)))
+
+    try:
+        # start_new_session so the daemon survives this shell: it must outlive
+        # the command that started it, and a Ctrl-C aimed at barnacle's
+        # process group must not reach it.
+        proc = subprocess.Popen(argv, stdout=log, stderr=log,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        print("barnacle: cannot run %s: %s" % (argv[0], e), file=sys.stderr)
+        return 1
+
+    # Wait for it to answer rather than for it to exist. A daemon that started
+    # and then failed to load its BPF is a running process for a moment, and
+    # reporting that as success is the failure this whole tool exists to
+    # avoid.
+    for _ in range(100):
+        if daemon_running():
+            with open(PID_FILE, "w", encoding="utf-8") as fh:
+                fh.write("%d\n" % proc.pid)
+            st = daemon_stats() or {}
+            print("daemon started (pid %s), %s statement(s) from %s"
+                  % (st.get("pid", proc.pid), st.get("statements", "?"),
+                     st.get("list", stmts)))
+            # Anything attached to a PREVIOUS daemon is now holding maps this
+            # one did not make. Say so here rather than letting it be
+            # discovered as "the cache stopped working".
+            warn_stale(stale_attachments(st, read_attached()))
+            return 0
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    print("barnacle: daemon did not come up; last lines of %s:" % LOG_FILE,
+          file=sys.stderr)
+    tail = read_file(LOG_FILE).decode("utf-8", "replace").splitlines()[-12:]
+    for line in tail:
+        print("    %s" % line, file=sys.stderr)
+    return 1
+
+
+def cmd_stop_server(cfg, args):
+    st = daemon_stats()
+    if st is None:
+        print("daemon is not running")
+        # A pid file with no daemon behind it is stale; take it away so the
+        # next status does not report a process that is gone.
+        try:
+            os.unlink(PID_FILE)
+        except OSError:
+            pass
+        return 0
+
+    # The daemon's own pid, not the one we launched: barnacle may not be the
+    # process that started it, and the pid file may be from a previous run.
+    pid = int(st.get("pid", "0") or 0) or read_pid()
+    if not pid:
+        print("barnacle: daemon is answering but will not say its pid",
+              file=sys.stderr)
+        return 1
+    if args.dry_run:
+        print("[dry-run] would stop daemon pid %d" % pid)
+        return 0
+
+    print("stopping daemon (pid %d)" % pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        print("barnacle: %s" % e, file=sys.stderr)
+        return 1
+
+    for _ in range(100):
+        if not alive(pid):
+            break
+        time.sleep(0.1)
+    else:
+        print("barnacle: daemon did not exit; sending SIGKILL", file=sys.stderr)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    try:
+        os.unlink(PID_FILE)
+    except OSError:
+        pass
+
+    # Attached agents are still hooked, and this is worth saying plainly: they
+    # keep parsing and stop being able to serve anything, so the application
+    # carries on with every query going to the database.
+    n = len(read_attached())
+    print("daemon stopped" + (
+        "; %d client(s) still attached and now passing everything through" % n
+        if n else ""))
+    return 0
+
+
+# --- attaching and detaching ----------------------------------------------
+
+
+def cmd_attach_client(cfg, args):
+    procs = discover(cfg)
+    for p in procs:
+        analyse(p)
+    report(procs, explain=False)
+
+    ready = [p for p in procs if p.verdict == ATTACHABLE]
+    if not ready:
+        print("\nnothing attachable; run 'analyze' for the reasoning",
+              file=sys.stderr)
+        return 1
+
+    if not daemon_running():
+        print("\nbarnacle: the daemon is not running; start it first with "
+              "'barnacle start-server'.\nThe agent opens pins the daemon "
+              "creates, so injection would attach and then do nothing.",
+              file=sys.stderr)
+        return 1
+
+    # Before injecting, not after: an agent that comes up while interception
+    # is globally off would attach and sit idle until the next poll.
+    ctl("CLIENT on")
+
+    stmts = cfg.stmt_list()
+    print()
+    attached = {e[0]: e for e in read_attached()}
+    now = time.time()
+    ok = 0
+    for p in ready:
+        if attach_one(p, stmts, args.dry_run, args.verbose):
+            attached[p.pid] = (p.pid, p.comm, now)
+            ok += 1
+    if not args.dry_run:
+        write_attached([attached[k] for k in sorted(attached)])
+    print("\nattached %d of %d" % (ok, len(ready)))
+    return 0 if ok else 1
+
+
+def cmd_detach_client(cfg, args):
+    # The map flag first, and unconditionally. It reaches every agent at once,
+    # including ones in processes the injector cannot get back into, and it
+    # takes effect within the agent's poll interval. Unhooking below is the
+    # thorough half; this is the half that cannot fail.
+    if not args.dry_run and ctl("CLIENT off") is None:
+        print("barnacle: the daemon is not running, so interception could not "
+              "be\nswitched off centrally. Unhooking each process instead.",
+              file=sys.stderr)
+
+    entries = read_attached()
+    if not entries:
+        print("no attached clients recorded in %s" % ATTACHED)
+        return 0
+
+    ok = 0
+    for pid, comm, _ in entries:
+        if detach_one(pid, comm, args.dry_run, args.verbose):
+            ok += 1
+    if not args.dry_run:
+        write_attached([])
+    print("\ndetached %d of %d" % (ok, len(entries)))
+    return 0 if ok == len(entries) else 1
+
+
+def cmd_reload_config(cfg, args):
+    """Re-read the configuration and push it to everything already running.
+
+    Two things have to move, and they are separate because they live in
+    separate places. The daemon holds the statement table in a BPF map and
+    re-seeds it from the list file. Each agent holds its OWN copy of the list,
+    because matching happens on the application's thread and cannot involve a
+    lookup -- so each one needs the new file where it can read it, and a
+    reason to go and read it. The daemon's generation counter is that reason.
+
+    Settings that the daemon can change without restarting travel the same
+    way, so that editing the config and running this is the whole story for
+    them rather than "and also restart the daemon for that one". Right now
+    that is `local_cache`; anything the daemon can only apply at startup stays
+    a start-server argument, and this says so rather than appearing to apply
+    it.
+    """
+    stmts = cfg.stmt_list()
+    if not stmts:
+        print("barnacle: no statement list configured", file=sys.stderr)
+        return 1
+    if not os.path.isfile(stmts):
+        print("barnacle: no such statement list: %s" % stmts, file=sys.stderr)
+        return 1
+    if args.dry_run:
+        print("[dry-run] would re-stage %s and reload the daemon" % stmts)
+        return 0
+
+    # The file first. An agent that saw the new generation before the file
+    # arrived would re-read the old list and then believe it was current.
+    entries = read_attached()
+    for pid, comm, _ in entries:
+        stage(pid, stmts, "cache.list")
+
+    reply = ctl("RELOAD")
+    if reply is None:
+        print("barnacle: the daemon is not running", file=sys.stderr)
+        return 1
+    reply = reply.strip()
+    if not reply.startswith("ok"):
+        print("barnacle: %s" % reply, file=sys.stderr)
+        return 1
+
+    print("daemon reloaded: %s" % reply[3:] if len(reply) > 3 else "daemon reloaded")
+
+    # A reload that loaded nothing is worth saying out loud. It is a normal
+    # state -- the list really can be empty -- but it is also what a mistyped
+    # path looks like, and what an edit that has not landed yet looks like on
+    # a bind-mounted filesystem, where the writer and the reader can disagree
+    # about a file's contents for a moment. Reporting the count is the only
+    # way anyone can tell which they are looking at.
+    if (daemon_stats() or {}).get("statements") == "0":
+        print("\nnote: the list is empty, so nothing will be cached.\n"
+              "      %s\n"
+              "      If you just edited it, the edit may not have reached this\n"
+              "      filesystem yet -- check the file and run reload-config again."
+              % stmts, file=sys.stderr)
+
+    was_local = (daemon_stats() or {}).get("local_on")
+    ctl("LOCAL on" if cfg.local_cache else "LOCAL off")
+    now_local = "1" if cfg.local_cache else "0"
+    if was_local is not None and was_local != now_local:
+        print("local tier %s" % ("on -- hits are served from this host's arena"
+                                 if cfg.local_cache else
+                                 "bypassed -- every lookup now goes to Valkey"))
+
+    st = daemon_stats() or {}
+    stale = stale_attachments(st, entries)
+    live = len(entries) - len(stale)
+
+    print("generation %s; %d attached client(s) will pick it up within a "
+          "quarter second" % (st.get("generation", "?"), live))
+    warn_stale(stale)
+    return 0
+
+
+# --- status ---------------------------------------------------------------
+
+
+def human_time(secs):
+    secs = int(secs)
+    if secs < 60:
+        return "%ds" % secs
+    if secs < 3600:
+        return "%dm%02ds" % (secs // 60, secs % 60)
+    return "%dh%02dm" % (secs // 3600, (secs % 3600) // 60)
+
+
+def cmd_status(cfg, args):
+    st = daemon_stats()
+    attached = read_attached()
+
+    if st is None:
+        print("daemon        not running")
+        print("control       %s (no answer)" % CTL_SOCK)
+        if attached:
+            print("clients       %d still attached, passing everything through"
+                  % len(attached))
+            for pid, comm, _ in attached:
+                print("              pid %-7d %s" % (pid, comm))
+        else:
+            print("clients       none attached")
+        print("\nStart it with 'barnacle start-server'.")
+        return 1
+
+    lookups = (int(st.get("hits", 0)) + int(st.get("misses", 0))
+               + int(st.get("errors", 0)))
+
+    print("daemon        running (pid %s, up %s)"
+          % (st.get("pid", "?"), human_time(st.get("uptime", 0))))
+    print("control       %s" % CTL_SOCK)
+    print("statements    %s configured, %s cached locally  [%s]"
+          % (st.get("statements", "?"), st.get("cached", "?"),
+             st.get("list", "?")))
+    print("cache         %s %s, %s key(s), ttl %ss"
+          % (st.get("valkey", "?"),
+             "reachable" if st.get("valkey_ok") == "1" else "UNREACHABLE",
+             st.get("valkey_keys", "?"), st.get("ttl", "?")))
+    print("local tier    %s"
+          % ("on -- a hit here costs no round trip"
+             if st.get("local_on") == "1" else
+             "BYPASSED -- every lookup goes to Valkey"))
+    # `used` is live bytes; `retired` is memory that is dead but still inside
+    # its grace period, waiting for any client that resolved a pointer to it
+    # to have finished. Retired climbing and never falling means the daemon is
+    # not reclaiming; used climbing and never falling means something is being
+    # allocated and never given back.
+    used, cap = st.get("arena_used"), st.get("arena_cap")
+    if used and cap:
+        print("arena         %s KiB of %s KiB used, %s block(s) retired"
+              % (int(used) // 1024, int(cap) // 1024,
+                 st.get("arena_retired", "?")))
+    print("pipes         %s total, %s free"
+          % (st.get("pipes", "?"), st.get("pipes_free", "?")))
+    print("lookups       %d total: %s hit, %s miss, %s error"
+          % (lookups, st.get("hits", "?"), st.get("misses", "?"),
+             st.get("errors", "?")))
+    print("stores        %s accepted, %s refused"
+          % (st.get("stores", "?"), st.get("refused", "?")))
+    print("interception  %s (generation %s, %s reload(s))"
+          % ("on" if st.get("client_on") == "1" else "OFF -- detached",
+             st.get("generation", "?"), st.get("reloads", "?")))
+
+    stale = stale_attachments(st, attached)
+    if attached:
+        stale_pids = {e[0] for e in stale}
+        print("clients       %d attached%s"
+              % (len(attached),
+                 ", %d STALE" % len(stale) if stale else ""))
+        for pid, comm, _ in attached:
+            print("              pid %-7d %s%s"
+                  % (pid, comm, "   (stale)" if pid in stale_pids else ""))
+    else:
+        print("clients       none attached  ('barnacle attach-client')")
+    warn_stale(stale)
+
+    if args.verbose:
+        print()
+        for p in discover(cfg):
+            analyse(p)
+            print("              pid %-7d %-14s %s" % (p.pid, p.comm, p.verdict))
+    return 0
+
+
+# --- entry point ----------------------------------------------------------
+
+
+COMMANDS = {
+    "status": cmd_status,
+    "start-server": cmd_start_server,
+    "stop-server": cmd_stop_server,
+    "attach-client": cmd_attach_client,
+    "detach-client": cmd_detach_client,
+    "reload-config": cmd_reload_config,
+}
+
+
+def make_parser():
+    # Python 3.14's argparse colorizes help by default. Turn that off through
+    # argparse's own parameter rather than an environment variable, and only
+    # where it exists -- passing it on 3.13 is a TypeError.
+    kwargs = {}
+    if sys.version_info >= (3, 14):
+        kwargs["color"] = False
+
+    ap = argparse.ArgumentParser(
+        prog="barnacle",
+        description="The query cache's front door: run the daemon, attach to "
+                    "programs, and carry configuration changes out to both.",
+        epilog="Runs on the host. Container processes are visible through "
+               "/proc like any others, so no container runtime is required.",
+        **kwargs,
+    )
+    # BARNACLE_CONF so a deployment (or the demo container) can point this at
+    # its own config once, in the environment, rather than every command line
+    # carrying the same -c.
+    ap.add_argument("-c", "--config",
+                    default=os.environ.get("BARNACLE_CONF",
+                                           "config/barnacle.conf"),
+                    metavar="PATH",
+                    help="config file (default: %(default)s, or $BARNACLE_CONF)")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="report what would happen, change nothing")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("command",
+                    choices=sorted(COMMANDS) + ["list", "analyze"],
+                    help="status: what is running and what it has done; "
+                         "start-server / stop-server: the daemon's lifecycle; "
+                         "attach-client / detach-client: the agent, in every "
+                         "configured process; "
+                         "reload-config: re-read the config and push it to "
+                         "both; "
+                         "list / analyze: which processes match, and why they "
+                         "can or cannot be hooked")
+    return ap
+
+
+def main(argv=None):
+    args = make_parser().parse_args(argv)
+
+    try:
+        cfg = load_config(args.config)
+    except (OSError, ValueError) as e:
+        print("barnacle: %s" % e, file=sys.stderr)
+        return 1
+
+    if args.command in ("list", "analyze"):
+        procs = discover(cfg)
+        for p in procs:
+            analyse(p)
+        report(procs, explain=args.command == "analyze")
+        return 0
+
+    return COMMANDS[args.command](cfg, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

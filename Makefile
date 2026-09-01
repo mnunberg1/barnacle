@@ -1,23 +1,24 @@
 # Transparent MySQL query cache.
 #
-# Run inside the bpf container (see demo/README.md to bring it up):
+# Run inside the controller (see demo/README.md to bring it up):
 #
-#   docker compose -f demo/docker-compose.yml exec bpf make          everything
-#   docker compose -f demo/docker-compose.yml exec bpf make check    tests that need no kernel or root
-#   docker compose -f demo/docker-compose.yml exec bpf make test     everything, including privileged tests
+#   docker compose -f demo/docker-compose.yml exec ctl make          everything
+#   docker compose -f demo/docker-compose.yml exec ctl make check    tests that need no kernel or root
+#   docker compose -f demo/docker-compose.yml exec ctl make test     everything, including privileged tests
 #
 # Components:
 #
-#   barnacle  entry point (qc-barnacle). Runs on the host, finds target
-#             programs inside containers via /proc, decides whether each is
-#             attachable, and injects the agent. Python: it reads /proc and
+#   barnacle  entry point (build/barnacle). Runs on the host: owns the
+#             daemon's lifecycle, finds target programs inside containers via
+#             /proc, decides whether each is attachable, injects the agent,
+#             and reports status. Python: it reads /proc, writes a socket and
 #             runs a subprocess, and must work on a host with no toolchain.
-#   daemon    the userspace daemon (qc-daemon): dpipe pool, cache,
+#   daemon    the userspace daemon (bncl-daemon): dpipe pool, cache,
 #             mini-protocol. Owns the shared state, which lives in kernel BPF
 #             maps and arenas.
 #   kclient   kernel eBPF: the two sk_msg redirect programs.
-#   uclient   the agent Frida injects into target processes (libqcagent.so),
-#             plus the injector (qc-inject). Ordinary C++: it maps the arena,
+#   uclient   the agent Frida injects into target processes (libbnclagent.so),
+#             plus the injector (bncl-inject). Ordinary C++: it maps the arena,
 #             parses MySQL with src/common, and holds per-connection state.
 #             eBPF is used only where code must run in the kernel, which here
 #             means kclient alone.
@@ -43,8 +44,8 @@ COMMON_SRC := src/common/mysql/protocol.cpp src/common/valkey.cpp src/common/ses
 
 .PHONY: all clean check test frida-paths
 
-all: $(OUT)/qc-barnacle $(OUT)/qc-daemon $(OUT)/kclient.bpf.o \
-     $(OUT)/libqcagent.so $(OUT)/qc-inject
+all: $(OUT)/barnacle $(OUT)/bncl-daemon $(OUT)/kclient.bpf.o \
+     $(OUT)/libbnclagent.so $(OUT)/bncl-inject
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -80,10 +81,10 @@ FRIDA_SYS := -lpthread -ldl -lm -lresolv
 # shared.cpp is compiled separately on purpose: frida-gum.h and libbpf's
 # bpf.h both declare bpf_insn, as an enum and a struct respectively, so they
 # cannot appear in one translation unit.
-$(OUT)/qcagent_shared.o: src/uclient/shared.cpp | $(OUT)
+$(OUT)/bnclagent_shared.o: src/uclient/shared.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -fPIC -Isrc -c $< -o $@
 
-$(OUT)/qcagent_bpfsys.o: src/uclient/bpfsys.c | $(OUT)
+$(OUT)/bnclagent_bpfsys.o: src/uclient/bpfsys.c | $(OUT)
 	$(CC) $(CFLAGS) -fPIC -Isrc -c $< -o $@
 
 # Everything static except libc.
@@ -100,8 +101,8 @@ LIBDIR := /usr/lib/$(UNAME_M)-linux-gnu
 # never resolves, and the failure then lands at dlopen time inside somebody
 # else's process -- as "undefined symbol" from a library that has already
 # replaced their SSL_read. Refuse it here instead.
-$(OUT)/libqcagent.so: src/uclient/agent.cpp $(OUT)/qcagent_shared.o \
-                      $(OUT)/qcagent_bpfsys.o \
+$(OUT)/libbnclagent.so: src/uclient/agent.cpp $(OUT)/bnclagent_shared.o \
+                      $(OUT)/bnclagent_bpfsys.o \
                       src/common/session.cpp src/common/stmtlist.cpp \
                       src/common/mysql/resultset.cpp \
                       src/common/mysql/protocol.cpp | $(OUT)
@@ -110,7 +111,7 @@ $(OUT)/libqcagent.so: src/uclient/agent.cpp $(OUT)/qcagent_shared.o \
 	  $(FRIDA_DIR)/libfrida-gum.a \
 	  -static-libstdc++ -static-libgcc $(FRIDA_SYS)
 
-$(OUT)/qc-inject: src/uclient/inject.cpp | $(OUT)
+$(OUT)/bncl-inject: src/uclient/inject.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -Isrc -I$(FRIDA_DIR) $< -o $@ \
 	  $(FRIDA_DIR)/libfrida-core.a $(FRIDA_SYS)
 
@@ -119,11 +120,11 @@ frida-paths:
 	@test -f $(FRIDA_DIR)/libfrida-gum.a && echo "  gum:  found" || echo "  gum:  MISSING"
 	@test -f $(FRIDA_DIR)/libfrida-core.a && echo "  core: found" || echo "  core: MISSING"
 
-# --- qc-daemon: the userspace daemon --------------------------------------
+# --- bncl-daemon: the userspace daemon --------------------------------------
 #
 # Owns everything shared: loads kclient, creates the maps and the arena,
 # builds the dpipe pool, answers requests.
-$(OUT)/qc-daemon: src/daemon/main.cpp src/daemon/arena.cpp src/daemon/dpipes.cpp \
+$(OUT)/bncl-daemon: src/daemon/main.cpp src/daemon/arena.cpp src/daemon/dpipes.cpp \
                   src/common/stmtlist.cpp src/common/valkey.cpp \
                   src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
                   $(OUT)/kclient.skel.h
@@ -133,13 +134,16 @@ $(OUT)/qc-daemon: src/daemon/main.cpp src/daemon/arena.cpp src/daemon/dpipes.cpp
 	  src/common/mysql/resultset.cpp src/common/mysql/protocol.cpp \
 	  -o $@ -lbpf -lelf -lz
 
-# --- qc-barnacle: the entry point -----------------------------------------
+# --- barnacle: the entry point -----------------------------------------
 #
 # Python, and copied rather than compiled. It reads /proc, matches strings and
 # runs a subprocess -- no protocol work, no BPF map, not on any hot path. It
 # also runs on the HOST, where libbpf and a C++ toolchain may not exist at
 # all, which is the second reason not to build it.
-$(OUT)/qc-barnacle: src/barnacle/qc-barnacle | $(OUT)
+# `barnacle` is the whole command line: `barnacle status`, `barnacle
+# start-server`, and so on. It is the one component named for the project
+# rather than with the bncl- prefix, because it is the name a person types.
+$(OUT)/barnacle: src/barnacle/barnacle | $(OUT)
 	cp $< $@
 	chmod +x $@
 
@@ -158,6 +162,11 @@ $(OUT)/test_session: tests/test_session.cpp src/common/session.cpp \
 
 $(OUT)/test_resultset: tests/test_resultset.cpp src/common/mysql/resultset.cpp \
                        src/common/mysql/protocol.cpp | $(OUT)
+	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
+
+# The shared heap. Pure logic over a byte range -- no kernel, no BPF map, no
+# root -- which is why it is in `check` rather than `test`.
+$(OUT)/test_arena: tests/test_arena.cpp src/daemon/arena.cpp | $(OUT)
 	$(CXX) $(CXXFLAGS) -Isrc $^ -o $@ $(GTEST_LIBS)
 
 $(OUT)/test_request: tests/test_request.cpp src/common/session.cpp \
@@ -179,11 +188,12 @@ $(OUT)/test_caps: tests/test_caps.c | $(OUT)
 # Needs neither kernel nor root -- the practical benefit of keeping protocol
 # parsing in userspace.
 check: $(OUT)/test_protocol $(OUT)/test_session $(OUT)/test_request \
-       $(OUT)/test_resultset
+       $(OUT)/test_resultset $(OUT)/test_arena
 	./$(OUT)/test_protocol
 	./$(OUT)/test_session
 	./$(OUT)/test_request
 	./$(OUT)/test_resultset
+	./$(OUT)/test_arena
 
 # Privileged: sockmap attach and kernel feature probes.
 #
@@ -198,12 +208,16 @@ test: check $(OUT)/test_caps $(OUT)/test_xproc
 	./$(OUT)/test_xproc
 	-./$(OUT)/test_xproc --socketpair
 
-# Everything the tree still knows how to build.
+# Names this tree used to build under, removed so a build directory that
+# predates a rename does not keep shipping executables nothing refers to any
+# more. The qc-* entries are from when the project was called qcache.
 clean-stale:
 	rm -f $(OUT)/uclient.bpf.o $(OUT)/uclient.skel.h $(OUT)/uclient_loader \
 	      $(OUT)/test_pipes $(OUT)/test_redirect $(OUT)/test_shm_bridge \
 	      $(OUT)/qcdemo $(OUT)/test_daemon $(OUT)/agent $(OUT)/qcache \
-	      $(OUT)/qcinject $(OUT)/test_stmtlist
+	      $(OUT)/qcinject $(OUT)/test_stmtlist \
+	      $(OUT)/qc-daemon $(OUT)/qc-inject $(OUT)/qc-barnacle \
+	      $(OUT)/libqcagent.so $(OUT)/qcagent_shared.o $(OUT)/qcagent_bpfsys.o
 
 clean:
 	rm -rf $(OUT)

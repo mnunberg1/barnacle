@@ -23,12 +23,12 @@ extern "C" {
 #endif
 
 /* Open a pinned map. Returns a descriptor, or -1. */
-int qc_bpf_obj_get(const char *path);
+int bncl_bpf_obj_get(const char *path);
 
 /* Map element access. All return 0 on success, -1 otherwise. */
-int qc_bpf_lookup(int fd, const void *key, void *value);
-int qc_bpf_update(int fd, const void *key, const void *value, uint64_t flags);
-int qc_bpf_delete(int fd, const void *key);
+int bncl_bpf_lookup(int fd, const void *key, void *value);
+int bncl_bpf_update(int fd, const void *key, const void *value, uint64_t flags);
+int bncl_bpf_delete(int fd, const void *key);
 
 #ifdef __cplusplus
 }

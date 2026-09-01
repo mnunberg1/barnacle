@@ -59,22 +59,22 @@
  */
 
 /* Concurrently hijacked connections. Bounds both SOCKMAPs and the freelist. */
-#define QC_MAX_PIPES 4096
+#define BNCL_MAX_PIPES 4096
 
 /* Distinct cacheable statements. This is an administrator-curated list, not
  * something that grows with traffic, so it is small by nature. */
-#define QC_MAX_STMTS 1024
+#define BNCL_MAX_STMTS 1024
 
 /* Longest statement text that can be matched. Statements longer than this are
  * simply not cacheable. */
-#define QC_STMT_MAX 512
+#define BNCL_STMT_MAX 512
 
 /* Largest response UCLIENT will serve from its own in-process copy. Bigger
  * ones are not un-cacheable, they just do not take the local fast path. */
-#define QC_LOCAL_MAX 8192
+#define BNCL_LOCAL_MAX 8192
 
 /* Arena size, in pages. Holds statement text and cached response bodies. */
-#define QC_ARENA_PAGES 4096 /* 16 MiB at 4K pages */
+#define BNCL_ARENA_PAGES 4096 /* 16 MiB at 4K pages */
 
 /*
  * Fixed virtual address the arena is mapped at, in every process.
@@ -85,11 +85,66 @@
  * have to become an offset with a per-process base added back. Pinning the
  * address makes a pointer just a pointer.
  */
-#define QC_ARENA_VA (1ULL << 44)
+#define BNCL_ARENA_VA (1ULL << 44)
+
+/*
+ * The one thing at a known address in the arena: a lock, at the very front.
+ *
+ * The dpipe freelist is a BPF map, and taking a pipe off it is a
+ * read-modify-write across three bpf(2) calls -- read the count, read the top
+ * entry, write the count back. Every attached process does that, and bpf(2)
+ * offers no compare-and-swap, so two clients can read the same count and walk
+ * away holding the same pipe. Both then splice their own socket to it, the
+ * second overwriting the first, and the daemon's answer to one query is
+ * delivered into the other client's TLS session -- which it reads as a
+ * corrupt record and drops the connection.
+ *
+ * That is not theoretical; it is what eight clients issuing one statement at
+ * one instant reliably produced. The window is tiny per attempt, which is why
+ * it stayed hidden while pipes were held for microseconds. Holding one for the
+ * length of a query, as a client waiting behind someone else's fetch now does,
+ * makes collisions ordinary.
+ *
+ * The arena is the natural home for the fix: it is already shared memory, and
+ * already mapped at the same address in every process, so an ordinary atomic
+ * works across all of them. architecture.txt anticipated exactly this ("simple
+ * atomic counters + spinlocks should be sufficient").
+ */
+struct bncl_ctl {
+    __u32 lock; /* 0 free, 1 held */
+    __u32 _pad;
+    __u64 taken_ns; /* CLOCK_MONOTONIC, for breaking an abandoned lock */
+
+    /* --- the heap ---
+     *
+     * Offsets from the base of the arena, not pointers, so the control
+     * block says the same thing however it is mapped. Everything the
+     * allocator needs is here rather than in daemon memory, which keeps
+     * the arena self-describing: a reader with the base address can walk
+     * it without asking anyone.
+     */
+    __u32 heap;      /* first block */
+    __u32 heap_end;  /* one past the last */
+    __u32 free_head; /* first free block, 0 for none */
+    __u32 retire;    /* first block waiting out its grace period */
+    __u64 used;      /* bytes currently handed out, headers excluded */
+};
+
+/* Bytes at the front of the arena that allocation must not hand out. */
+#define BNCL_CTL_BYTES 64
 
 /* Where the maps are pinned, so a process that did not create them can get a
  * descriptor. UCLIENT's loader opens these; the daemon creates them. */
-#define QC_PIN_DIR "/sys/fs/bpf/qcache"
+#define BNCL_PIN_DIR "/sys/fs/bpf/barnacle"
+
+/*
+ * Runtime state that is NOT in a BPF map: the daemon's pid file, its log, and
+ * the control socket barnacle talks to. Ordinary files, because the thing
+ * reading them is a Python CLI that must work on a host with no bpftool and
+ * no libbpf.
+ */
+#define BNCL_RUN_DIR "/run/barnacle"
+#define BNCL_CTL_SOCK BNCL_RUN_DIR "/daemon.sock"
 
 /* --- statements ---------------------------------------------------------- */
 
@@ -103,7 +158,7 @@
  * and that is a different feature.
  */
 struct stmt_key {
-	char text[QC_STMT_MAX];
+    char text[BNCL_STMT_MAX];
 };
 
 struct stmt;
@@ -120,14 +175,19 @@ struct stmt;
  * payload, which reads as "not fetched yet" rather than as an empty hit.
  */
 enum stmt_state {
-	/* Present locally in the arena; the bytes are right there. */
-	STMT_S_LOCAL = 0,
-	/* Someone is already fetching it. Other clients wait rather than each
-	 * starting a duplicate fetch of the same thing. */
-	STMT_S_PENDING = 1,
-	/* The cache is unusable for this statement. Pass through untouched
-	 * until OPT_ERROR_TTL has elapsed. */
-	STMT_S_ERROR = 2,
+    /* Present locally in the arena; the bytes are right there. */
+    STMT_S_LOCAL = 0,
+    /* Someone is already fetching it. Other clients would wait rather than
+     * each starting a duplicate fetch of the same thing.
+     *
+     * Declared, not used: nothing sets it today. The cache assumes instead
+     * that a statement gets populated once and that clients converge on it
+     * shortly after -- see architecture.txt III for what coordinating the
+     * miss would involve. */
+    STMT_S_PENDING = 1,
+    /* The cache is unusable for this statement. Pass through untouched
+     * until OPT_ERROR_TTL has elapsed. */
+    STMT_S_ERROR = 2,
 };
 
 /*
@@ -139,14 +199,30 @@ enum stmt_state {
  * socket that both sides can already see into.
  */
 struct stmt {
-	const char __arena *stmt_txt;
-	__u64 stmt_len;
-	__u64 stmt_ts; /* last updated, CLOCK_MONOTONIC ns */
-	__u32 stmt_state;
-	__u32 stmt_id; /* universal id, stable across processes */
-	void __arena *stmt_data;
-	__u64 stmt_data_len;
-	__u32 stmt_ttl;
+    const char __arena *stmt_txt;
+    __u64 stmt_len;
+    __u64 stmt_ts; /* last updated, CLOCK_MONOTONIC ns */
+    __u32 stmt_state;
+    __u32 stmt_id; /* universal id, stable across processes */
+    void __arena *stmt_data;
+    __u64 stmt_data_len;
+    __u32 stmt_ttl;
+
+    /*
+     * How many holders this record has, across every process.
+     *
+     * Published with 1: the statement table's own reference, dropped when
+     * the administrator takes the statement out of the list. Every client
+     * that is about to use the record adds one and drops it when done, so
+     * a record cannot be reclaimed while somebody is reading the payload
+     * it points at.
+     *
+     * Taking a reference is a compare-and-swap that REFUSES to go from 0
+     * to 1, not a plain increment: zero means the record has been retired
+     * and is waiting to be freed, and resurrecting it there would hand out
+     * memory the daemon has already promised to reclaim.
+     */
+    __u32 stmt_refs;
 };
 
 /*
@@ -164,30 +240,65 @@ struct stmt {
  */
 typedef __u64 stmt_ref; /* arena address of a struct stmt, 0 for none */
 
+#ifndef __bpf__
+/*
+ * Take a reference, or fail.
+ *
+ * A compare-and-swap loop rather than an increment, because the interesting
+ * case is the one an increment gets wrong: a record whose count has already
+ * reached zero is retired and waiting to be freed, and bringing it back to one
+ * would hand out memory the daemon has promised to reclaim. Refusing at zero
+ * is what makes "retired" mean retired.
+ *
+ * Defined here, once, because both the daemon and the injected agent take
+ * references and a refcount protocol implemented twice is a refcount protocol
+ * that will eventually disagree with itself.
+ */
+static inline int bncl_stmt_get(struct stmt *st)
+{
+    __u32 cur = __atomic_load_n(&st->stmt_refs, __ATOMIC_ACQUIRE);
+
+    while (cur != 0) {
+        if (__atomic_compare_exchange_n(&st->stmt_refs, &cur, cur + 1, 0, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Drop a reference. Returns non-zero if this was the last one, which makes
+ * the caller responsible for retiring the record. */
+static inline int bncl_stmt_put(struct stmt *st)
+{
+    return __atomic_sub_fetch(&st->stmt_refs, 1, __ATOMIC_ACQ_REL) == 0;
+}
+#endif /* __bpf__ */
+
 /* --- connections --------------------------------------------------------- */
 
 enum conn_type {
-	CONN_T_UNKNOWN = 0,
-	CONN_T_CLEAR = 1,
-	CONN_T_SSL = 2,
+    CONN_T_UNKNOWN = 0,
+    CONN_T_CLEAR = 1,
+    CONN_T_SSL = 2,
 };
 
 enum txn_state {
-	TXN_S_UNKNOWN = 0,
-	TXN_S_INACTIVE = 1,
-	/* Caching is disabled outright while a transaction is open: reads
-	 * inside one may see uncommitted data, and caching them would leak one
-	 * session's view into others. */
-	TXN_S_ACTIVE = 2,
+    TXN_S_UNKNOWN = 0,
+    TXN_S_INACTIVE = 1,
+    /* Caching is disabled outright while a transaction is open: reads
+     * inside one may see uncommitted data, and caching them would leak one
+     * session's view into others. */
+    TXN_S_ACTIVE = 2,
 };
 
 /* A buffer being assembled in the arena. Neither send(2) nor recv(2)
  * necessarily carries a whole protocol message, so both directions have to be
  * accumulated until a decision can be made. */
 struct mybuf {
-	__u8 __arena *data;
-	__u32 len;
-	__u32 cap;
+    __u8 __arena *data;
+    __u32 len;
+    __u32 cap;
 };
 
 /*
@@ -198,13 +309,13 @@ struct mybuf {
  * what to replay if the daemon never answers.
  */
 struct conn_info {
-	__u32 conn_type; /* enum conn_type */
-	__u32 txn_state; /* enum txn_state */
-	struct stmt __arena *conn_stmt;
-	__u32 dpipe_id; /* daemon-side sockmap key */
-	__u32 cpipe_id; /* client-side sockmap key */
-	struct mybuf __arena *request;
-	__u64 last_ts;
+    __u32 conn_type; /* enum conn_type */
+    __u32 txn_state; /* enum txn_state */
+    struct stmt __arena *conn_stmt;
+    __u32 dpipe_id; /* daemon-side sockmap key */
+    __u32 cpipe_id; /* client-side sockmap key */
+    struct mybuf __arena *request;
+    __u64 last_ts;
 };
 
 /* --- pipes --------------------------------------------------------------- */
@@ -237,8 +348,8 @@ struct conn_info {
  * is. Everything the serial then names is indexed by the serial.
  */
 struct pipe_sk_info {
-	__u32 key;    /* this socket is cpipe_map[key] or dpipe_map[key] */
-	__u32 paired; /* 0 while the socket is not hijacked */
+    __u32 key;    /* this socket is cpipe_map[key] or dpipe_map[key] */
+    __u32 paired; /* 0 while the socket is not hijacked */
 };
 
 /*
@@ -263,19 +374,19 @@ struct pipe_sk_info {
  * runs the program on send. See tests/test_xproc.c --socketpair.
  */
 struct dpipe {
-	__u32 key; /* index in dpipe_map, dpipes and the freelist */
-	__u32 cfd; /* far end; held open only to keep the connection alive */
-	__u32 sfd; /* the daemon's i/o end, and what dpipe_map holds */
-	__u64 ts;  /* last activity, for the LRU sweep */
-	struct stmt __arena *stmt;
-	__u32 in_use;
+    __u32 key; /* index in dpipe_map, dpipes and the freelist */
+    __u32 cfd; /* far end; held open only to keep the connection alive */
+    __u32 sfd; /* the daemon's i/o end, and what dpipe_map holds */
+    __u64 ts;  /* last activity, for the LRU sweep */
+    struct stmt __arena *stmt;
+    __u32 in_use;
 };
 
 /* Bookkeeping for the pool. The client pops from the freelist, so both of
  * these are written from more than one process and move under atomics. */
 struct dpipes_meta {
-	__u32 serial;   /* next key to hand out; monotonic */
-	__u32 num_free; /* live entries in dpipe_freelist */
+    __u32 serial;   /* next key to hand out; monotonic */
+    __u32 num_free; /* live entries in dpipe_freelist */
 };
 
 /*
@@ -288,7 +399,7 @@ struct dpipes_meta {
  * it can only ever be replayed to a connection just like its source.
  */
 /* CLIENT_PROTOCOL_41 | CLIENT_TRANSACTIONS | CLIENT_DEPRECATE_EOF */
-#define QC_CANONICAL_CAPS 0x01002200u
+#define BNCL_CANONICAL_CAPS 0x01002200u
 
 /* --- the mini-protocol --------------------------------------------------- */
 
@@ -299,19 +410,19 @@ struct dpipes_meta {
  * about a statement it is about to run, and hands back the answer it got if
  * there was not one already.
  */
-enum qc_req_kind {
-	QC_REQ_LOOKUP = 0, /* is this statement cached? */
-	QC_REQ_STORE = 1,  /* here is the response; cache it */
+enum bncl_req_kind {
+    BNCL_REQ_LOOKUP = 0, /* is this statement cached? */
+    BNCL_REQ_STORE = 1,  /* here is the response; cache it */
 };
 
 /* Largest response a client may hand back. Big enough for real result sets,
  * small enough that a confused client cannot make the daemon allocate
  * arbitrarily. */
-#define QC_STORE_MAX (4u * 1024 * 1024)
+#define BNCL_STORE_MAX (4u * 1024 * 1024)
 
-struct qc_req {
-	__u32 kind; /* enum qc_req_kind */
-	__u32 len;  /* bytes of payload following, QC_REQ_STORE only */
+struct bncl_req {
+    __u32 kind; /* enum bncl_req_kind */
+    __u32 len;  /* bytes of payload following, BNCL_REQ_STORE only */
 };
 
 /*
@@ -319,31 +430,87 @@ struct qc_req {
  * redirected socket.
  */
 enum agent_status {
-	/* The cache has it. The bytes are in the arena, reachable through the
-	 * statement -- they do not follow on the socket. */
-	AGENT_OK = 0x01,
-	/* Miss. Read-through: the query goes to the server as normal and the
-	 * client hands the response back, so the next caller hits. Nothing is
-	 * ever fetched speculatively -- the cache only learns what someone
-	 * actually asked for. (The name is the status code from
-	 * architecture.txt; the mechanism is read-through.) */
-	AGENT_WRITE_THROUGH = 0x00,
-	/* Cache unreachable. Pass through untouched. */
-	AGENT_CACHE_ERROR = 0xff,
+    /* The cache has it. The bytes are in the arena, reachable through the
+     * statement -- they do not follow on the socket. */
+    AGENT_OK = 0x01,
+    /* Miss. Read-through: the query goes to the server as normal and the
+     * client hands the response back, so the next caller hits. Nothing is
+     * ever fetched speculatively -- the cache only learns what someone
+     * actually asked for. (The name is the status code from
+     * architecture.txt; the mechanism is read-through.) */
+    AGENT_WRITE_THROUGH = 0x00,
+    /* Cache unreachable. Pass through untouched. */
+    AGENT_CACHE_ERROR = 0xff,
 };
 
 /* Four bytes, as specified. What follows AGENT_OK is a reference into the
  * arena rather than the payload itself. */
 struct agent_reply {
-	__u8 status;
-	__u8 _pad[3];
-	__u32 stmt_id;
+    __u8 status;
+    __u8 _pad[3];
+    __u32 stmt_id;
 };
 
 /* --- configuration slots ------------------------------------------------- */
 
-#define QC_CFG_ENABLED 0
-#define QC_CFG_PORT 1
-#define QC_CFG_DAEMON_TGID 2
-#define QC_CFG_ERROR_TTL 3
-#define QC_CFG__N 4
+#define BNCL_CFG_ENABLED 0
+#define BNCL_CFG_PORT 1
+#define BNCL_CFG_DAEMON_TGID 2
+#define BNCL_CFG_ERROR_TTL 3
+
+/*
+ * Whether attached agents should intercept at all.
+ *
+ * `barnacle detach-client` clears this, and every agent stops matching
+ * statements within one poll interval. It exists as well as the per-process
+ * revert because detach must take effect even for a process the injector
+ * cannot reach a second time -- and because turning interception off is one
+ * map write, while unhooking is a per-process operation that can fail.
+ */
+#define BNCL_CFG_CLIENT_ON 4
+
+/*
+ * Bumped by the daemon whenever the statement list is re-read.
+ *
+ * Agents hold their own copy of the list (matching happens in the client
+ * process, on the client's thread, and must not involve a lookup), so a
+ * reload has to reach them somehow. A counter they poll is the cheapest
+ * thing that works: no signal to deliver, no socket to hold open, and an
+ * agent that missed one bump still sees the value differ.
+ */
+#define BNCL_CFG_GENERATION 5
+
+/*
+ * Whether the LOCAL tier may answer. Set by default; cleared to make every
+ * lookup go to Valkey.
+ *
+ * There are two tiers, and they are not the same kind of thing. Valkey is the
+ * shared one -- one copy, visible to every host. The arena is a per-host copy
+ * that each attached process has mapped, so a hit there is a memory read and
+ * costs no round trip and no command. That is the fast path, and clearing
+ * this switch gives it up on purpose.
+ *
+ * Reasons to give it up:
+ *
+ *   - the shared tier is then the only authority, so a key expired or deleted
+ *     in Valkey takes effect at the next lookup rather than whenever the
+ *     local copy happens to age out.
+ *   - several hosts stay closer together, since none of them is answering
+ *     from a copy the others cannot see.
+ *   - and every hit becomes visible: MONITOR shows the traffic that a local
+ *     hit, by construction, never generates.
+ *
+ * What it costs: a round trip on the hot path, and the cache stops working
+ * entirely while Valkey is unreachable -- there is no longer a local copy to
+ * fall back to. That degrades to passing queries through, which is safe, but
+ * it is the whole cache rather than one tier.
+ *
+ * The arena is still how a response reaches the client, in both modes. This
+ * governs whether a copy already sitting there may be TRUSTED, not whether it
+ * is used: the daemon writes the freshly fetched bytes there and the client
+ * reads them from there, because a result set is never copied through the
+ * control path.
+ */
+#define BNCL_CFG_LOCAL_ON 6
+
+#define BNCL_CFG__N 7

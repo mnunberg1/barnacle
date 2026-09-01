@@ -29,23 +29,24 @@
 #include <string>
 #include <vector>
 
-namespace mysql {
+namespace mysql
+{
 
 /* Protocol::ColumnDefinition41. Every field is kept, including the ones this
  * project never reads: they go back on the wire verbatim, and a client is
  * entitled to care about any of them. */
 struct Column {
-	std::string catalog; /* always "def" in practice */
-	std::string schema;
-	std::string table;
-	std::string org_table;
-	std::string name;
-	std::string org_name;
-	uint16_t charset = 0;
-	uint32_t length = 0;
-	uint8_t type = 0;
-	uint16_t flags = 0;
-	uint8_t decimals = 0;
+    std::string catalog; /* always "def" in practice */
+    std::string schema;
+    std::string table;
+    std::string org_table;
+    std::string name;
+    std::string org_name;
+    uint16_t charset = 0;
+    uint32_t length = 0;
+    uint8_t type = 0;
+    uint16_t flags = 0;
+    uint8_t decimals = 0;
 };
 
 /* One field. Empty optional is SQL NULL, which is distinct from the empty
@@ -55,13 +56,13 @@ using Value = std::optional<std::string>;
 using Row = std::vector<Value>;
 
 struct ResultSet {
-	std::vector<Column> cols;
-	std::vector<Row> rows;
+    std::vector<Column> cols;
+    std::vector<Row> rows;
 
-	/* From the terminating packet. status carries SERVER_STATUS_IN_TRANS,
-	 * which decides whether the response was safe to cache at all. */
-	uint16_t status = 0;
-	uint16_t warnings = 0;
+    /* From the terminating packet. status carries SERVER_STATUS_IN_TRANS,
+     * which decides whether the response was safe to cache at all. */
+    uint16_t status = 0;
+    uint16_t warnings = 0;
 };
 
 /*

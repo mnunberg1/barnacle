@@ -1,0 +1,108 @@
+Setup:
+
+1) MySQL Server - this can be populated by whatever data, it does not matter.
+    This runs on its own Docker container.
+
+2) Valkey Server - this acts as the cache. This runs in its own container.
+
+3) Client Application - this is a sealed application that makes queries to the
+    MySQL server. This also runs in its own container.
+
+4) Barnacle Components - this consists of a running daemon, a controller, and
+    a client agent. These components should be pre-compiled. This runs mainly
+    inside a docker or kubernetes host. It must have supervisor/root access
+    to the client application (but not the valkey or MySQL server)
+
+MySQL Server Setup
+~~~~~~~~~~~~~~~~~~
+
+MySQL server setup should be designed for artificial latency, either through
+manipulating the network stack, or other tricks (research this). The aim is
+to simulate a real world MySQL deployment where accessing some queries might
+take time.
+
+The data, query complexity, and so on is irrelevant for now..
+
+Valkey Setup
+~~~~~~~~~~~~
+
+This should be a simple single-node instance, without replication, clustering, etc.
+
+
+Client Application Design
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+We don't know what the client application is doing (maybe it's a database product, maybe
+it's a crawler/scraper, etc), but it issues many queries randomly and repeatedly.
+
+There are about 20 queries made to MySQL. 15 of them are instantaneous, but 5 of them take
+1.5 seconds each to complete.
+
+The client application logs to the screen every 5 seconds, stating the average query time;
+it also logs whenever any query takes longer than 500ms
+
+
+Barnacle Setup
+~~~~~~~~~~~~~~
+
+We have a command line entry point called 'barnacle', this program is the main entry point
+
+We have
+
+```
+barnacle status
+barnacle start-server
+barnacle stop-server
+barnacle attach-client
+barnacle detach-client
+barnacle reload-config
+```
+
+- start-server
+
+This starts the daemon
+
+- stop-server
+
+This stops the daemon
+
+- attach-client
+
+attaches the client to configured userspace programs
+
+- detach-client
+
+removes and undoes all client attachment
+
+- reload-config
+
+reloads the configuration and notifies client and daemon
+
+- status
+
+returns the status; this shows statistics such as how many
+caches are saved, how many clients are connected, and so on.
+
+Once we have a list of SLOW QUERIES, we modify the barnacle
+configuration file for those queries, and do barnacle reload-config,
+
+The expected behavior is that we see increased response time in the clients,
+and we also see more traffic to/from valkey
+
+When we stop the server and/or detach from the clients, the application is expected
+to continue functioning, but slower than before, as traffic is now routed
+to MySQL
+
+Physical Setup
+~~~~~~~~~~~~~~
+
+We want a separate terminal window for one of each:
+
+1) MySQL Log
+2) Valkey MONITOR log
+3) Client application log
+4) Host control terminal
+
+- MySQL should be configured to log query output
+- Valkey MONITOR should be running, showing commands sent to valkey
+- Application should be running (all the time...)

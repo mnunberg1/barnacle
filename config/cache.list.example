@@ -1,8 +1,19 @@
-# Statements the transparent cache is allowed to serve from Valkey.
-# Exact byte match against the statement text on the wire.
+# Statements the transparent cache is allowed to serve.
+#
+# Exact byte match against the statement text on the wire -- no normalisation,
+# no parameter extraction. A statement that differs by one space is a
+# different statement, and `WHERE id = 5` is not a prefix match for anything.
+#
+# List the queries that cost something. A statement here is a promise that its
+# result is worth reusing for `ttl` seconds; anything not listed is passed
+# through untouched.
 #
 # Copy this to cache.list (gitignored) and list your own queries.
 #
 #   cp config/cache.list.example config/cache.list
+#
+# After editing, apply it without restarting anything:
+#
+#   barnacle reload-config
 
 SELECT * FROM my_table WHERE id = 1

@@ -5,6 +5,7 @@
 #include "uclient/bpfsys.h"
 
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -15,25 +16,22 @@
 
 #define PIN(name) BNCL_PIN_DIR "/" name
 
-namespace bnclagent
-{
+namespace bncl::agent {
 
 /* The mirrored definitions in shared.h must match the real ones. This is the
  * one file that can see both. */
-static_assert(sizeof(Reply) == sizeof(struct agent_reply),
-              "bnclagent::Reply has drifted from struct agent_reply");
+static_assert(sizeof(Reply) == sizeof(agent_reply),
+              "bncl::agent::Reply has drifted from struct agent_reply");
 static_assert(REPLY_OK == AGENT_OK && REPLY_WRITE_THROUGH == AGENT_WRITE_THROUGH &&
-                  REPLY_CACHE_ERROR == (uint8_t)AGENT_CACHE_ERROR,
-              "bnclagent reply statuses have drifted from enum agent_status");
+                  REPLY_CACHE_ERROR == static_cast<uint8_t>(AGENT_CACHE_ERROR),
+              "bncl::agent reply statuses have drifted from enum agent_status");
 static_assert(CANONICAL_CAPS == BNCL_CANONICAL_CAPS,
-              "bnclagent::CANONICAL_CAPS has drifted from BNCL_CANONICAL_CAPS");
+              "bncl::agent::CANONICAL_CAPS has drifted from BNCL_CANONICAL_CAPS");
 
-namespace
-{
+namespace {
 
-class FDS
-{
-  public:
+class FDS {
+public:
     uint8_t *arena = nullptr;
     int stmts_fd = -1;
     int dpipes_fd = -1;
@@ -79,7 +77,7 @@ bool post(int fd, const void *buf, size_t n)
 {
     ssize_t w = send(fd, buf, n, MSG_NOSIGNAL);
 
-    return w == (ssize_t)n;
+    return w == static_cast<ssize_t>(n);
 }
 
 /*
@@ -96,14 +94,19 @@ bool post(int fd, const void *buf, size_t n)
  * cost of waiting forever is an application thread hung inside SSL_write for a
  * cache. Nothing here is ever allowed to be worse than not caching.
  */
-struct bncl_ctl *ctl()
+bncl_ctl *ctl()
 {
-    return (struct bncl_ctl *)(void *)BNCL_ARENA_VA;
+    return reinterpret_cast<bncl_ctl *>(static_cast<uintptr_t>(BNCL_ARENA_VA));
+}
+
+stmt *stmtFromRef(stmt_ref ref)
+{
+    return reinterpret_cast<stmt *>(static_cast<uintptr_t>(ref));
 }
 
 bool lockPipes()
 {
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
 
     if (!fds.arena) {
         return false;
@@ -116,14 +119,15 @@ bool lockPipes()
 
         if (__atomic_compare_exchange_n(&c->lock, &free_slot, 1u, false, __ATOMIC_ACQUIRE,
                                         __ATOMIC_RELAXED)) {
-            struct timespec ts{};
+            timespec ts{};
 
             clock_gettime(CLOCK_MONOTONIC, &ts);
             /* Stamped so the daemon can tell a held lock from an
              * abandoned one. Written after the lock is ours, which
              * is the only time it can be written safely. */
             __atomic_store_n(&c->taken_ns,
-                             (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec,
+                             static_cast<uint64_t>(ts.tv_sec) * 1000000000ull +
+                                 static_cast<uint64_t>(ts.tv_nsec),
                              __ATOMIC_RELAXED);
             return true;
         }
@@ -141,7 +145,7 @@ void unlockPipes()
  * query goes to the server as it otherwise would. Call with the lock held. */
 bool popDpipe(uint32_t &key)
 {
-    struct dpipes_meta meta{};
+    dpipes_meta meta{};
     uint32_t zero = 0, slot;
 
     if (bncl_bpf_lookup(fds.meta_fd, &zero, &meta) || meta.num_free == 0) {
@@ -157,7 +161,7 @@ bool popDpipe(uint32_t &key)
 
 void pushDpipe(uint32_t key)
 {
-    struct dpipes_meta meta{};
+    dpipes_meta meta{};
     uint32_t zero = 0;
 
     if (bncl_bpf_lookup(fds.meta_fd, &zero, &meta)) {
@@ -199,14 +203,15 @@ bool openShared()
     /* MAP_FIXED: the arena must land where the daemon put it, or the
      * pointers stored inside it mean nothing here. A different address
      * would appear to work and then hand out garbage, so fail loudly. */
-    void *p = mmap((void *)BNCL_ARENA_VA, (size_t)BNCL_ARENA_PAGES * 4096, PROT_READ | PROT_WRITE,
+    auto *const arena_addr = reinterpret_cast<void *>(static_cast<uintptr_t>(BNCL_ARENA_VA));
+    void *p = mmap(arena_addr, static_cast<size_t>(BNCL_ARENA_PAGES) * 4096, PROT_READ | PROT_WRITE,
                    MAP_SHARED | MAP_FIXED, fd, 0);
 
-    if (p != (void *)BNCL_ARENA_VA) {
+    if (p != arena_addr) {
         fprintf(stderr, "agent: arena did not map at the shared address\n");
         return false;
     }
-    fds.arena = (uint8_t *)p;
+    fds.arena = static_cast<uint8_t *>(p);
     /* The mapping keeps the map alive; the descriptor has done its job.
      * It matters now that this function can run more than once. */
     close(fd);
@@ -254,7 +259,7 @@ bool cfgRead(Switches &out)
 
 bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &id)
 {
-    struct stmt_key k{};
+    stmt_key k{};
     stmt_ref ref = 0;
 
     if (!fds.arena || sql.size() > BNCL_STMT_MAX - 1) {
@@ -265,7 +270,7 @@ bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &
         return false;
     }
 
-    struct stmt *st = (struct stmt *)(unsigned long)ref;
+    auto st = stmtFromRef(ref);
 
     /*
      * Hold a reference for as long as the payload is being read.
@@ -290,11 +295,12 @@ bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &
     }
 
     if (st->stmt_ttl && st->stmt_ts) {
-        struct timespec ts{};
+        timespec ts{};
 
         clock_gettime(CLOCK_MONOTONIC, &ts);
 
-        uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+        auto now =
+            static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
 
         if (now > st->stmt_ts && (now - st->stmt_ts) / 1000000000ull > st->stmt_ttl) {
             bncl_stmt_put(st);
@@ -302,7 +308,7 @@ bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &
         }
     }
 
-    const uint8_t *p = (const uint8_t *)st->stmt_data;
+    auto p = static_cast<const uint8_t *>(st->stmt_data);
 
     out.assign(p, p + st->stmt_data_len);
     id = st->stmt_id;
@@ -312,7 +318,7 @@ bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &
 
 bool acquire(const std::string &sql, int sock, uint32_t &key)
 {
-    struct stmt_key k{};
+    stmt_key k{};
     stmt_ref ref = 0;
 
     if (!fds.arena || sql.size() > BNCL_STMT_MAX - 1) {
@@ -339,7 +345,7 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
         return false;
     }
 
-    struct dpipe rec{};
+    dpipe rec{};
 
     if (bncl_bpf_lookup(fds.dpipes_fd, &key, &rec)) {
         pushDpipe(key);
@@ -352,7 +358,7 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
      * record and the daemon follows it, so it has to outlive the request
      * whatever the administrator does to the statement list meanwhile.
      */
-    if (!bncl_stmt_get((struct stmt *)(unsigned long)ref)) {
+    if (!bncl_stmt_get(stmtFromRef(ref))) {
         pushDpipe(key);
         unlockPipes();
         return false;
@@ -360,14 +366,14 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
 
     /* Point the pipe at the statement. This is what lets the request carry
      * nothing but a key: everything else hangs off the pipe. */
-    rec.stmt = (struct stmt *)(unsigned long)ref;
+    rec.stmt = stmtFromRef(ref);
     rec.in_use = 1;
     bncl_bpf_update(fds.dpipes_fd, &key, &rec, 0);
     unlockPipes();
 
     /* Hijack our own socket. Both calls take a plain fd because we own it;
      * the daemon could not do this for us even if it wanted to. */
-    struct pipe_sk_info si{};
+    pipe_sk_info si{};
 
     si.key = key;
     si.paired = 1;
@@ -384,7 +390,7 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
 
 bool askLookup(int sock)
 {
-    struct bncl_req req{};
+    bncl_req req{};
 
     req.kind = BNCL_REQ_LOOKUP;
     req.len = 0;
@@ -393,13 +399,13 @@ bool askLookup(int sock)
 
 bool askStore(int sock, const std::vector<uint8_t> &canonical)
 {
-    struct bncl_req req{};
+    bncl_req req{};
 
     if (canonical.empty() || canonical.size() > BNCL_STORE_MAX) {
         return false;
     }
     req.kind = BNCL_REQ_STORE;
-    req.len = (uint32_t)canonical.size();
+    req.len = static_cast<uint32_t>(canonical.size());
 
     /* Header and body in one write: two would let another thread's request
      * interleave on the same pipe, and a short second write would leave
@@ -413,8 +419,8 @@ bool askStore(int sock, const std::vector<uint8_t> &canonical)
 
 void release(int sock, uint32_t key)
 {
-    struct pipe_sk_info si{};
-    struct dpipe rec{};
+    pipe_sk_info si{};
+    dpipe rec{};
 
     /* Clear `paired` first: while it is set every byte this socket sends
      * goes to the daemon rather than to the server. */
@@ -430,7 +436,7 @@ void release(int sock, uint32_t key)
      * daemon picks it up on its next pass.
      */
     if (bncl_bpf_lookup(fds.dpipes_fd, &key, &rec) == 0 && rec.stmt) {
-        bncl_stmt_put((struct stmt *)rec.stmt);
+        bncl_stmt_put(rec.stmt);
     }
 
     /*
@@ -450,4 +456,4 @@ void release(int sock, uint32_t key)
     }
 }
 
-} // namespace bnclagent
+} // namespace bncl::agent

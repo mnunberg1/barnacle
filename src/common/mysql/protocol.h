@@ -26,8 +26,7 @@
 #include <string_view>
 #include <vector>
 
-namespace mysql
-{
+namespace mysql {
 
 /* Every packet is a 4-byte header (3-byte little-endian payload length, then
  * a 1-byte sequence id) followed by that many payload bytes. */
@@ -97,8 +96,7 @@ struct Message {
  * This exists because neither send() nor recv() respects message boundaries:
  * a single SSL_read may deliver half a packet or three of them.
  */
-class MessageReader
-{
+class MessageReader {
 public:
     void append(const uint8_t *data, size_t len);
     void append(std::string_view s);

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "session.h"
 
-namespace bncl
-{
+namespace bncl {
 
 void RequestTracker::begin(uint32_t c)
 {
@@ -87,7 +86,8 @@ void ResponseTracker::finish(const mysql::Message &msg)
 
         got = mysql::parseEof(p, n, eof);
         status = eof.status_flags;
-    } else {
+    }
+    else {
         mysql::OkPacket ok;
 
         got = mysql::parseOk(p, n, caps_, ok);

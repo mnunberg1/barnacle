@@ -48,6 +48,7 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -66,17 +67,16 @@
 
 #include "kclient.skel.h"
 
-namespace
-{
+namespace {
 
 volatile sig_atomic_t exiting_s;
 
 uint64_t now_ns()
 {
-    struct timespec ts{};
+    timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 /*
@@ -91,7 +91,7 @@ uint64_t now_ns()
  * the first request fetches rather than serving whatever the pointer happens
  * to reference.
  */
-bool expired(const struct stmt *st, uint64_t now)
+bool expired(const stmt *st, uint64_t now)
 {
     if (!st->stmt_ttl) {
         return false; /* ttl 0 means "do not expire" */
@@ -99,7 +99,12 @@ bool expired(const struct stmt *st, uint64_t now)
     if (!st->stmt_ts) {
         return true;
     }
-    return now - st->stmt_ts > (uint64_t)st->stmt_ttl * 1000000000ull;
+    return now - st->stmt_ts > static_cast<uint64_t>(st->stmt_ttl) * 1000000000ull;
+}
+
+stmt_ref stmtToRef(stmt *rec)
+{
+    return static_cast<stmt_ref>(reinterpret_cast<uintptr_t>(rec));
 }
 
 void on_signal(int)
@@ -140,12 +145,10 @@ struct Counters {
     unsigned long lockbreaks = 0;
 };
 
-class Daemon
-{
+class Daemon {
 public:
     explicit Daemon(const Options &o) : opt(o)
-    {
-    }
+    {}
 
     bool start();
     void run();
@@ -157,8 +160,8 @@ private:
     void serve(int fd);
     void reply(int fd, uint8_t status, uint32_t stmt_id);
     bool store(uint32_t key, const std::vector<uint8_t> &body);
-    void *keep(struct stmt *st, const std::vector<uint8_t> &body);
-    void retireStmt(struct stmt *st, uint64_t now);
+    void *keep(stmt *st, const std::vector<uint8_t> &body);
+    void retireStmt(stmt *st, uint64_t now);
     void collectOrphans(uint64_t now);
     bool readExactly(int fd, void *buf, size_t n);
 
@@ -171,9 +174,9 @@ private:
     uint32_t cfgGet(uint32_t slot);
 
     Options opt;
-    struct kclient_bpf *skel = nullptr;
-    bncld::Arena arena;
-    bncld::Pool pool;
+    kclient_bpf *skel = nullptr;
+    bncl::daemon::Arena arena;
+    bncl::daemon::Pool pool;
     bncl::StmtList list;
     bncl::Valkey valkey;
     std::unordered_map<int, uint32_t> key_of_fd;
@@ -181,12 +184,12 @@ private:
     /* Statements already published, by text. A reload reuses these records
      * rather than making new ones: a client may be holding a pointer to
      * one, and it may hold a payload worth keeping. */
-    std::unordered_map<std::string, struct stmt *> known;
+    std::unordered_map<std::string, stmt *> known;
     uint32_t next_id = 1;
 
     /* Records taken out of the list while a client still held one. They
      * are unreachable -- the map key is gone -- but not yet dead. */
-    std::vector<struct stmt *> orphans;
+    std::vector<stmt *> orphans;
 
     Counters cnt;
     /* Mirrors BNCL_CFG_LOCAL_ON, which `LOCAL on|off` moves at runtime. Held
@@ -261,11 +264,11 @@ bool Daemon::loadStatements()
     }
 
     int fd = bpf_map__fd(skel->maps.stmts_map);
-    std::unordered_map<std::string, struct stmt *> next;
+    std::unordered_map<std::string, stmt *> next;
 
     for (const std::string &sql : fresh.all()) {
-        struct stmt_key key{};
-        struct stmt *rec;
+        stmt_key key{};
+        stmt *rec;
         stmt_ref ref;
 
         if (sql.size() > BNCL_STMT_MAX - 1) {
@@ -280,11 +283,12 @@ bool Daemon::loadStatements()
 
         if (it != known.end()) {
             rec = it->second;
-            rec->stmt_ttl = (uint32_t)opt.ttl;
-        } else {
-            char *txt = (char *)arena.put(sql.c_str(), sql.size() + 1);
+            rec->stmt_ttl = static_cast<uint32_t>(opt.ttl);
+        }
+        else {
+            auto *txt = static_cast<char *>(arena.put(sql.c_str(), sql.size() + 1));
 
-            rec = (struct stmt *)arena.alloc(sizeof(*rec));
+            rec = static_cast<stmt *>(arena.alloc(sizeof(*rec)));
             if (!txt || !rec) {
                 fprintf(stderr, "daemon: arena exhausted seeding statements\n");
                 return false;
@@ -301,11 +305,11 @@ bool Daemon::loadStatements()
             rec->stmt_txt = txt;
             rec->stmt_len = sql.size();
             rec->stmt_id = next_id++;
-            rec->stmt_ttl = (uint32_t)opt.ttl;
+            rec->stmt_ttl = static_cast<uint32_t>(opt.ttl);
         }
 
         memcpy(key.text, sql.data(), sql.size());
-        ref = (stmt_ref)(unsigned long)rec;
+        ref = stmtToRef(rec);
         if (bpf_map_update_elem(fd, &key, &ref, BPF_ANY)) {
             fprintf(stderr, "daemon: cannot publish statement: %s\n", strerror(errno));
             return false;
@@ -329,7 +333,7 @@ bool Daemon::loadStatements()
     uint64_t now = now_ns();
 
     for (const auto &kv : known) {
-        struct stmt_key key{};
+        stmt_key key{};
 
         if (next.count(kv.first)) {
             continue;
@@ -338,7 +342,8 @@ bool Daemon::loadStatements()
         bpf_map_delete_elem(fd, &key);
         if (bncl_stmt_put(kv.second)) {
             retireStmt(kv.second, now);
-        } else {
+        }
+        else {
             /* A client is still using it. It will drop its
              * reference when its request finishes; nobody but the
              * daemon may touch the heap, so the record waits here
@@ -366,7 +371,7 @@ bool Daemon::loadStatements()
  */
 bool Daemon::openControl()
 {
-    struct sockaddr_un sa{};
+    sockaddr_un sa{};
     size_t slash;
 
     if (opt.ctl_path.empty()) {
@@ -395,7 +400,7 @@ bool Daemon::openControl()
         int probe = socket(AF_UNIX, SOCK_STREAM, 0);
 
         if (probe >= 0) {
-            bool live = connect(probe, (struct sockaddr *)&sa, sizeof(sa)) == 0;
+            bool live = connect(probe, (sockaddr *)&sa, sizeof(sa)) == 0;
 
             ::close(probe);
             if (live) {
@@ -414,7 +419,7 @@ bool Daemon::openControl()
         fprintf(stderr, "daemon: control socket: %s\n", strerror(errno));
         return false;
     }
-    if (bind(ctl_fd, (struct sockaddr *)&sa, sizeof(sa)) || listen(ctl_fd, 8)) {
+    if (bind(ctl_fd, (sockaddr *)&sa, sizeof(sa)) || listen(ctl_fd, 8)) {
         fprintf(stderr, "daemon: cannot listen on %s: %s\n", opt.ctl_path.c_str(), strerror(errno));
         return false;
     }
@@ -451,7 +456,7 @@ void Daemon::stats(std::string &out)
     unsigned long refs = 0;
 
     for (const auto &kv : known) {
-        const struct stmt *st = kv.second;
+        const stmt *st = kv.second;
 
         if (st->stmt_data && !expired(st, now)) {
             cached++;
@@ -529,9 +534,11 @@ void Daemon::control(int fd)
 
     if (cmd == "PING") {
         reply = "ok\n";
-    } else if (cmd == "STATS") {
+    }
+    else if (cmd == "STATS") {
         stats(reply);
-    } else if (cmd == "RELOAD") {
+    }
+    else if (cmd == "RELOAD") {
         if (loadStatements()) {
             cnt.reloads++;
             /* Bumped AFTER the map is republished: an agent that
@@ -539,19 +546,23 @@ void Daemon::control(int fd)
              * already there. */
             cfgSet(BNCL_CFG_GENERATION, cfgGet(BNCL_CFG_GENERATION) + 1);
             reply = "ok " + std::to_string(list.size()) + " statement(s)\n";
-        } else {
+        }
+        else {
             reply = "error cannot reload " + opt.stmt_list + "\n";
         }
-    } else if (cmd == "CLIENT on" || cmd == "CLIENT off") {
+    }
+    else if (cmd == "CLIENT on" || cmd == "CLIENT off") {
         cfgSet(BNCL_CFG_CLIENT_ON, cmd == "CLIENT on" ? 1 : 0);
         reply = "ok\n";
-    } else if (cmd == "LOCAL on" || cmd == "LOCAL off") {
+    }
+    else if (cmd == "LOCAL on" || cmd == "LOCAL off") {
         local_on = cmd == "LOCAL on";
         /* Both ends have to agree, or the client stops asking about
          * statements the daemon would now happily fetch. */
         cfgSet(BNCL_CFG_LOCAL_ON, local_on ? 1 : 0);
         reply = "ok\n";
-    } else {
+    }
+    else {
         reply = "error unknown command\n";
     }
 
@@ -651,7 +662,7 @@ bool Daemon::start()
         return false;
     }
 
-    bncld::PoolMaps pm;
+    bncl::daemon::PoolMaps pm;
 
     pm.dpipe_map = bpf_map__fd(skel->maps.dpipe_map);
     pm.dpipes = bpf_map__fd(skel->maps.dpipes);
@@ -668,8 +679,8 @@ bool Daemon::start()
         return false;
     }
     for (uint32_t i = 0; i < opt.pipes; i++) {
-        bncld::Pipe *p = pool.byKey(i);
-        struct epoll_event ev{};
+        bncl::daemon::Pipe *p = pool.byKey(i);
+        epoll_event ev{};
 
         ev.events = EPOLLIN;
         ev.data.fd = p->sfd;
@@ -681,7 +692,7 @@ bool Daemon::start()
     }
 
     if (ctl_fd >= 0) {
-        struct epoll_event ev{};
+        epoll_event ev{};
 
         ev.events = EPOLLIN;
         ev.data.fd = ctl_fd;
@@ -713,7 +724,7 @@ bool Daemon::start()
 
 void Daemon::reply(int sfd, uint8_t status, uint32_t stmt_id)
 {
-    struct agent_reply r{};
+    agent_reply r{};
 
     r.status = status;
     r.stmt_id = stmt_id;
@@ -729,7 +740,7 @@ void Daemon::reply(int sfd, uint8_t status, uint32_t stmt_id)
 
 bool Daemon::readExactly(int fd, void *buf, size_t n)
 {
-    uint8_t *p = (uint8_t *)buf;
+    auto *p = static_cast<uint8_t *>(buf);
     size_t got = 0;
 
     while (got < n) {
@@ -738,7 +749,7 @@ bool Daemon::readExactly(int fd, void *buf, size_t n)
         if (r <= 0) {
             return false;
         }
-        got += (size_t)r;
+        got += static_cast<size_t>(r);
     }
     return true;
 }
@@ -753,14 +764,14 @@ bool Daemon::readExactly(int fd, void *buf, size_t n)
  */
 bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body)
 {
-    struct dpipe rec{};
+    dpipe rec{};
 
     if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.dpipes), &key, &rec) || !rec.stmt) {
         return false;
     }
 
-    struct stmt *st = (struct stmt *)rec.stmt;
-    std::string sql(st->stmt_txt ? (const char *)st->stmt_txt : "", (size_t)st->stmt_len);
+    auto *st = rec.stmt;
+    std::string sql(st->stmt_txt ? st->stmt_txt : "", static_cast<size_t>(st->stmt_len));
 
     if (sql.empty() || body.empty()) {
         return false;
@@ -795,13 +806,14 @@ bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body)
         return false;
     }
 
-    struct timespec ts{};
+    timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     st->stmt_data = p;
     st->stmt_data_len = body.size();
-    st->stmt_ttl = (uint32_t)opt.ttl;
-    st->stmt_ts = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    st->stmt_ttl = static_cast<uint32_t>(opt.ttl);
+    st->stmt_ts =
+        static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
     __atomic_store_n(&st->stmt_state, STMT_S_LOCAL, __ATOMIC_RELEASE);
     cnt.stores++;
 
@@ -849,36 +861,37 @@ void Daemon::collectOrphans(uint64_t now)
     size_t keep = 0;
 
     for (size_t i = 0; i < orphans.size(); i++) {
-        struct stmt *st = orphans[i];
+        stmt *st = orphans[i];
 
         if (__atomic_load_n(&st->stmt_refs, __ATOMIC_ACQUIRE) == 0) {
             retireStmt(st, now);
-        } else {
+        }
+        else {
             orphans[keep++] = st;
         }
     }
     orphans.resize(keep);
 }
 
-void Daemon::retireStmt(struct stmt *st, uint64_t now)
+void Daemon::retireStmt(stmt *st, uint64_t now)
 {
     if (st->stmt_data) {
-        arena.retire((void *)st->stmt_data, now);
+        arena.retire(st->stmt_data, now);
         st->stmt_data = 0;
         st->stmt_data_len = 0;
     }
     if (st->stmt_txt) {
-        arena.retire((void *)st->stmt_txt, now);
+        arena.retire(const_cast<char *>(st->stmt_txt), now);
         st->stmt_txt = 0;
     }
     arena.retire(st, now);
 }
 
-void *Daemon::keep(struct stmt *st, const std::vector<uint8_t> &body)
+void *Daemon::keep(stmt *st, const std::vector<uint8_t> &body)
 {
     if (st->stmt_data && st->stmt_data_len == body.size() &&
-        memcmp((const void *)st->stmt_data, body.data(), body.size()) == 0) {
-        return (void *)st->stmt_data;
+        memcmp(st->stmt_data, body.data(), body.size()) == 0) {
+        return st->stmt_data;
     }
 
     void *p = arena.put(body.data(), body.size());
@@ -890,7 +903,7 @@ void *Daemon::keep(struct stmt *st, const std::vector<uint8_t> &body)
      * here must leave the record exactly as it was.
      */
     if (p && st->stmt_data) {
-        arena.retire((void *)st->stmt_data, now_ns());
+        arena.retire(st->stmt_data, now_ns());
     }
     return p;
 }
@@ -910,7 +923,7 @@ void *Daemon::keep(struct stmt *st, const std::vector<uint8_t> &body)
  */
 void Daemon::breakStaleLock(uint64_t now)
 {
-    struct bncl_ctl *c = arena.ctl();
+    bncl_ctl *c = arena.ctl();
 
     if (!c || !__atomic_load_n(&c->lock, __ATOMIC_ACQUIRE)) {
         return;
@@ -931,7 +944,7 @@ void Daemon::breakStaleLock(uint64_t now)
 
 void Daemon::serve(int fd)
 {
-    struct bncl_req req{};
+    bncl_req req{};
 
     if (!readExactly(fd, &req, sizeof(req))) {
         return;
@@ -962,7 +975,7 @@ void Daemon::serve(int fd)
          */
         return;
     }
-    struct dpipe rec{};
+    dpipe rec{};
 
     if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.dpipes), &key, &rec)) {
         fprintf(stderr, "daemon: no record for dpipe %u\n", key);
@@ -980,8 +993,8 @@ void Daemon::serve(int fd)
      * silent hang this whole design exists to avoid.
      */
     {
-        bncld::Pipe *p = pool.byKey(key);
-        struct pipe_sk_info ci{};
+        bncl::daemon::Pipe *p = pool.byKey(key);
+        pipe_sk_info ci{};
 
         ci.key = key; /* dpipe[key] is spliced to cpipe[key] */
         ci.paired = 1;
@@ -1008,7 +1021,7 @@ void Daemon::serve(int fd)
         return;
     }
 
-    struct stmt *st = (struct stmt *)rec.stmt;
+    auto *st = rec.stmt;
     uint64_t now = now_ns();
     uint8_t status;
 
@@ -1018,10 +1031,12 @@ void Daemon::serve(int fd)
      * call every unseeded record a hit. */
     if (local_on && st->stmt_state == STMT_S_LOCAL && st->stmt_data && !expired(st, now)) {
         status = AGENT_OK;
-    } else if (!valkey.healthy() && !valkey.connect(opt.valkey_host, opt.valkey_port)) {
+    }
+    else if (!valkey.healthy() && !valkey.connect(opt.valkey_host, opt.valkey_port)) {
         status = AGENT_CACHE_ERROR;
-    } else {
-        std::string sql(st->stmt_txt ? (const char *)st->stmt_txt : "", (size_t)st->stmt_len);
+    }
+    else {
+        std::string sql(st->stmt_txt ? st->stmt_txt : "", static_cast<size_t>(st->stmt_len));
         std::vector<uint8_t> payload;
 
         if (!sql.empty() && valkey.get("bncl:" + sql, payload) && !payload.empty()) {
@@ -1033,14 +1048,16 @@ void Daemon::serve(int fd)
             if (p) {
                 st->stmt_data = p;
                 st->stmt_data_len = payload.size();
-                st->stmt_ttl = (uint32_t)opt.ttl;
+                st->stmt_ttl = static_cast<uint32_t>(opt.ttl);
                 st->stmt_ts = now;
                 __atomic_store_n(&st->stmt_state, STMT_S_LOCAL, __ATOMIC_RELEASE);
                 status = AGENT_OK;
-            } else {
+            }
+            else {
                 status = AGENT_CACHE_ERROR;
             }
-        } else {
+        }
+        else {
             /* Nothing upstream either. Drop the stale local copy so
              * the next request re-fetches rather than serving bytes
              * we have just been told are gone. */
@@ -1054,9 +1071,11 @@ void Daemon::serve(int fd)
 
     if (status == AGENT_OK) {
         cnt.hits++;
-    } else if (status == AGENT_WRITE_THROUGH) {
+    }
+    else if (status == AGENT_WRITE_THROUGH) {
         cnt.misses++;
-    } else {
+    }
+    else {
         cnt.errors++;
     }
 
@@ -1077,7 +1096,7 @@ void Daemon::serve(int fd)
 
 void Daemon::run()
 {
-    std::vector<struct epoll_event> events(64);
+    std::vector<epoll_event> events(64);
 
     while (!exiting_s) {
         int n = epoll_wait(epfd, events.data(), (int)events.size(), 500);
@@ -1193,29 +1212,41 @@ int main(int argc, char **argv)
 
         if (a == "-l") {
             opt.stmt_list = next();
-        } else if (a == "-H") {
+        }
+        else if (a == "-H") {
             opt.valkey_host = next();
-        } else if (a == "-P") {
-            opt.valkey_port = (uint16_t)atoi(next());
-        } else if (a == "-m") {
-            opt.mysql_port = (uint16_t)atoi(next());
-        } else if (a == "-n") {
-            opt.pipes = (uint32_t)atoi(next());
-        } else if (a == "-S") {
-            opt.max_stmts = (uint32_t)atoi(next());
-        } else if (a == "-C") {
-            opt.max_pipes = (uint32_t)atoi(next());
-        } else if (a == "-t") {
+        }
+        else if (a == "-P") {
+            opt.valkey_port = static_cast<uint16_t>(atoi(next()));
+        }
+        else if (a == "-m") {
+            opt.mysql_port = static_cast<uint16_t>(atoi(next()));
+        }
+        else if (a == "-n") {
+            opt.pipes = static_cast<uint32_t>(atoi(next()));
+        }
+        else if (a == "-S") {
+            opt.max_stmts = static_cast<uint32_t>(atoi(next()));
+        }
+        else if (a == "-C") {
+            opt.max_pipes = static_cast<uint32_t>(atoi(next()));
+        }
+        else if (a == "-t") {
             opt.ttl = atoi(next());
-        } else if (a == "-e") {
+        }
+        else if (a == "-e") {
             opt.error_ttl = atoi(next());
-        } else if (a == "-s") {
+        }
+        else if (a == "-s") {
             opt.ctl_path = next();
-        } else if (a == "-R") {
+        }
+        else if (a == "-R") {
             opt.local_on = false;
-        } else if (a == "-v") {
+        }
+        else if (a == "-v") {
             opt.verbose = true;
-        } else {
+        }
+        else {
             usage(argv[0]);
             return 1;
         }

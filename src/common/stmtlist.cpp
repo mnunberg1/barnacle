@@ -3,10 +3,8 @@
 
 #include <fstream>
 
-namespace bncl
-{
-namespace
-{
+namespace bncl {
+namespace {
 
 /* Trim both ends. Leading whitespace is stripped so an indented line in the
  * file matches the statement a client actually sends; trailing whitespace and

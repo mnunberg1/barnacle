@@ -22,8 +22,7 @@
 #include <string>
 #include <vector>
 
-namespace
-{
+namespace {
 
 /* A real response: SELECT sku, name, price FROM products WHERE
  * category = 'tools' AND SLEEP(1.5) = 0 -- 3 columns, 6 rows, captured from a

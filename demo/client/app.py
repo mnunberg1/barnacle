@@ -39,6 +39,7 @@ import random
 import select
 import sys
 import termios
+import threading
 import time
 import tty
 
@@ -190,6 +191,11 @@ GRAPH_HI = 4.0
 # How far the interval can be pushed with +/-, and the step between stops.
 RATE_MIN = 0.1
 RATE_MAX = 10.0
+
+# How often the display thread looks for a keypress. This is the delay between
+# pressing + and seeing the effect, so it wants to be short enough to feel
+# like nothing at all, and long enough not to spin.
+KEY_POLL = 0.05
 
 # Colour by how bad the latency is, so the histogram goes from red to green as
 # the cache takes over -- visible from across a room, which an average is not.
@@ -459,30 +465,95 @@ def apply_keys(typed, rate):
     return rate
 
 
+class Display(threading.Thread):
+    """Paints the frame on its own thread.
+
+    It has to be its own thread. Queries are synchronous and a slow one blocks
+    for up to three seconds, so a display driven from the query loop stops
+    dead for exactly as long as the thing it is supposed to be showing --
+    +/- would take that long to register, and the graph would skip columns and
+    quietly stop being uniform in time.
+
+    The lock covers both the window's samples and stdout: the query thread
+    adds timings and occasionally has something to say, and a frame torn in
+    half by a connection error is worse than either.
+    """
+
+    def __init__(self, win, frame, keys, rate):
+        super().__init__(daemon=True)
+        self.win = win
+        self.frame = frame
+        self.keys = keys
+        self.rate = rate
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+
+    def paint(self, now):
+        with self.lock:
+            self.win.prune(now)
+            self.win.tick()
+            self.frame.draw(self.win.render(self.rate, self.keys.live))
+
+    def run(self):
+        next_at = time.monotonic()
+        while not self.done.is_set():
+            now = time.monotonic()
+
+            # Keys first, and acted on where they are read: a rate change
+            # repaints immediately rather than at the end of an interval that
+            # may be ten seconds long. Pressing + and watching nothing happen
+            # is indistinguishable from the key not working.
+            typed = self.keys.pending()
+            if typed:
+                changed = apply_keys(typed, self.rate)
+                if changed != self.rate:
+                    self.rate = changed
+                    self.paint(now)
+                    next_at = now + self.rate
+                    continue
+
+            if now >= next_at:
+                self.paint(now)
+                # Advanced rather than reset to now, so the cadence holds. If
+                # it has fallen behind -- a very short interval, a slow
+                # render -- restart from here instead of firing repeatedly to
+                # catch up.
+                next_at += self.rate
+                if next_at <= now:
+                    next_at = now + self.rate
+
+            self.done.wait(KEY_POLL)
+
+    def stop(self):
+        self.done.set()
+        self.join(timeout=1.0)
+
+
 def run(args) -> int:
     conn = None
     win = Window(colour=args.colour, window=args.window)
     frame = Frame(redraw=args.redraw)
     keys = Keys()
-    rate = args.interval
+    display = Display(win, frame, keys, args.interval)
     issued = 0
-    next_draw = time.monotonic()
 
+    display.start()
     try:
         while True:
             if args.count and issued >= args.count:
-                win.prune(time.monotonic())
-                win.tick()
-                frame.draw(win.render(rate, keys.live))
+                display.stop()
+                display.paint(time.monotonic())
                 return 0
 
             try:
                 if conn is None:
                     conn = connect(args)
-                    frame.dirty()
-                    say("client: connected to %s:%d/%s -- %d statements, %d of "
-                        "them slow" % (args.host, args.port, args.db,
-                                       len(QUERIES), len(SLOW)))
+                    with display.lock:
+                        frame.dirty()
+                        say("client: connected to %s:%d/%s -- %d statements, "
+                            "%d of them slow"
+                            % (args.host, args.port, args.db, len(QUERIES),
+                               len(SLOW)))
 
                 sql = random.choice(QUERIES)
                 start = time.monotonic()
@@ -500,12 +571,14 @@ def run(args) -> int:
                             % (win.paint("SLOW", RED),
                                win.paint("%7s" % dur(elapsed), BOLD),
                                len(rows), ncols, sql[:52]))
-                win.add(time.monotonic(), elapsed, note)
+                with display.lock:
+                    win.add(time.monotonic(), elapsed, note)
 
             except MySQLError as exc:
-                frame.dirty()
-                print("client: query failed: %s" % (exc,), file=sys.stderr,
-                      flush=True)
+                with display.lock:
+                    frame.dirty()
+                    print("client: query failed: %s" % (exc,), file=sys.stderr,
+                          flush=True)
                 # Only a connection-level failure is worth reconnecting for. A
                 # statement the server rejected -- a missing table, a syntax
                 # error -- leaves a perfectly good connection, and throwing it
@@ -522,24 +595,9 @@ def run(args) -> int:
             except KeyboardInterrupt:
                 return 0
 
-            rate = apply_keys(keys.pending(), rate)
-
-            now = time.monotonic()
-            if now >= next_draw:
-                win.prune(now)
-                win.tick()
-                frame.draw(win.render(rate, keys.live))
-                # Advanced rather than reset to now, so the cadence holds
-                # instead of drifting by however long the last query took. If
-                # the rate just changed, or a slow query overran several
-                # intervals, restart from here rather than firing repeatedly
-                # to catch up.
-                next_draw += rate
-                if next_draw <= now:
-                    next_draw = now + rate
-
             time.sleep(random.uniform(args.min_interval, args.max_interval))
     finally:
+        display.stop()
         keys.restore()
 
 

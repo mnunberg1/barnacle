@@ -29,8 +29,7 @@
 #include <string>
 #include <vector>
 
-namespace mysql
-{
+namespace mysql {
 
 /* Protocol::ColumnDefinition41. Every field is kept, including the ones this
  * project never reads: they go back on the wire verbatim, and a client is

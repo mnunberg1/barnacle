@@ -37,10 +37,7 @@
 #include <cstdint>
 #include <vector>
 
-/* Namespace is `bncld`, not `bncl::daemon` or `daemon`: <unistd.h> declares
- * daemon(int, int), and a namespace of that name collides with it. */
-namespace bncld
-{
+namespace bncl::daemon {
 
 struct Pipe {
     uint32_t key = 0; /* index in dpipe_map, dpipes and the freelist */
@@ -58,8 +55,7 @@ struct PoolMaps {
     int info = -1;
 };
 
-class Pool
-{
+class Pool {
 public:
     /* Build `count` pipes, register each in dpipe_map, write its record to
      * dpipes, and publish its key on the freelist. */
@@ -95,4 +91,4 @@ private:
     int listen_fd = -1;
 };
 
-} // namespace bncld
+} // namespace bncl::daemon

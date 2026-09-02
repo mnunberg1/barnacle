@@ -20,11 +20,9 @@
 #include <string>
 #include <vector>
 
-namespace bncl
-{
+namespace bncl {
 
-class Valkey
-{
+class Valkey {
 public:
     ~Valkey();
 

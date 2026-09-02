@@ -25,8 +25,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace
-{
+namespace {
 
 mysql::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1)
 {

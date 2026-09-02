@@ -50,8 +50,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace bncld
-{
+namespace bncl::daemon {
 
 /*
  * How long a retired block waits before its memory is handed out again.
@@ -63,8 +62,7 @@ namespace bncld
  */
 constexpr uint64_t RETIRE_GRACE_NS = 5ull * 1000 * 1000 * 1000;
 
-class Arena
-{
+class Arena {
 public:
     /* Map the arena and lay out the heap. `map_fd` is the BPF arena map,
      * from the skeleton or a pin. Returns false if it could not be mapped
@@ -128,9 +126,9 @@ public:
      * falls means reclaim() is not being called. */
     size_t retired() const;
 
-    struct bncl_ctl *ctl() const
+    bncl_ctl *ctl() const
     {
-        return (struct bncl_ctl *)base;
+        return (bncl_ctl *)base;
     }
 
 private:
@@ -141,4 +139,4 @@ private:
     bool mapped = false;
 };
 
-} // namespace bncld
+} // namespace bncl::daemon

@@ -13,10 +13,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace bncl
-{
-namespace
-{
+namespace bncl {
+namespace {
 
 /* The cache's own socket operations must call straight into libc. If they
  * went through the interposed read()/recv() in preload.cpp, a cache lookup
@@ -57,8 +55,8 @@ void Valkey::disconnect()
 
 bool Valkey::connect(const std::string &host, uint16_t port)
 {
-    struct addrinfo hints{};
-    struct addrinfo *res = nullptr;
+    addrinfo hints{};
+    addrinfo *res = nullptr;
     char portstr[16];
 
     initRaw();

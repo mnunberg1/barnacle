@@ -27,8 +27,7 @@
 #include <string>
 #include <vector>
 
-namespace bncl
-{
+namespace bncl {
 
 /*
  * The request side: plaintext bytes handed to SSL_write, reassembled into
@@ -44,8 +43,7 @@ namespace bncl
  * than parsed leaves the reader misaligned for everything after it -- the
  * next "statement" would be read from the middle of the previous one.
  */
-class RequestTracker
-{
+class RequestTracker {
 public:
     /* `caps` must be the negotiated set. CLIENT_QUERY_ATTRIBUTES changes
      * where the statement text begins, so guessing gets it wrong on MySQL
@@ -92,8 +90,7 @@ private:
     uint8_t last_seq = 0;
 };
 
-class ResponseTracker
-{
+class ResponseTracker {
 public:
     void begin(uint32_t caps);
 

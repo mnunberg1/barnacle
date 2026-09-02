@@ -6,11 +6,9 @@
 #include <cstring>
 #include <sys/mman.h>
 
-namespace bncld
-{
+namespace bncl::daemon {
 
-namespace
-{
+namespace {
 
 /*
  * One block, free or in use.
@@ -42,8 +40,8 @@ constexpr size_t align8(size_t n)
     return (n + 7) & ~(size_t)7;
 }
 
-constexpr size_t HDR = sizeof(struct Blk);
-constexpr size_t FTR = sizeof(struct Foot);
+constexpr size_t HDR = sizeof(Blk);
+constexpr size_t FTR = sizeof(Foot);
 
 /*
  * Block sizes are multiples of 8, not just payloads.
@@ -76,8 +74,8 @@ struct Retired {
 
 /* --- walking the heap ---------------------------------------------------- */
 
-#define BLK(off) ((struct Blk *)(base + (off)))
-#define FOOT(off) ((struct Foot *)(base + (off) + BLK(off)->size - FTR))
+#define BLK(off) ((Blk *)(base + (off)))
+#define FOOT(off) ((Foot *)(base + (off) + BLK(off)->size - FTR))
 #define OFF(p) ((uint32_t)((uint8_t *)(p) - base))
 
 bool Arena::open(int map_fd)
@@ -125,7 +123,7 @@ bool Arena::init(void *mem, size_t len)
     cap = len;
 
     /* One free block covering everything past the control area. */
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
     uint32_t start = BNCL_CTL_BYTES;
     uint32_t size = (uint32_t)(cap - BNCL_CTL_BYTES);
 
@@ -136,7 +134,7 @@ bool Arena::init(void *mem, size_t len)
     c->retire = 0;
     c->used = 0;
 
-    struct Blk *b = BLK(start);
+    Blk *b = BLK(start);
 
     b->size = size;
     b->free = 1;
@@ -158,8 +156,7 @@ void Arena::close()
 
 /* --- the free list ------------------------------------------------------- */
 
-namespace
-{
+namespace {
 /* Offsets, so 0 can mean "none": the heap never starts at 0 because the
  * control block is there. */
 constexpr uint32_t NIL = 0;
@@ -180,13 +177,13 @@ void *Arena::alloc(size_t n)
         return nullptr;
     }
 
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
 
     /* First fit. A best-fit scan would pack better, but this list is
      * short and the cost of a poor fit here is a few wasted bytes in a
      * 16 MiB heap. */
     for (uint32_t off = c->free_head; off != NIL; off = BLK(off)->next) {
-        struct Blk *b = BLK(off);
+        Blk *b = BLK(off);
 
         if (b->size < want) {
             continue;
@@ -196,7 +193,8 @@ void *Arena::alloc(size_t n)
          * below only ever has to insert. */
         if (b->prev) {
             BLK(b->prev)->next = b->next;
-        } else {
+        }
+        else {
             c->free_head = b->next;
         }
         if (b->next) {
@@ -208,7 +206,7 @@ void *Arena::alloc(size_t n)
          * fragment nothing can ever be put in. */
         if (b->size - want >= MIN_BLOCK) {
             uint32_t rest_off = off + (uint32_t)want;
-            struct Blk *rest = BLK(rest_off);
+            Blk *rest = BLK(rest_off);
 
             rest->size = b->size - (uint32_t)want;
             rest->free = 1;
@@ -248,9 +246,9 @@ void Arena::free(void *p)
         return;
     }
 
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
     uint32_t off = OFF(p) - (uint32_t)HDR;
-    struct Blk *b = BLK(off);
+    Blk *b = BLK(off);
 
     if (b->free) {
         return; /* double free; refuse rather than corrupt the list */
@@ -262,11 +260,12 @@ void Arena::free(void *p)
     uint32_t after = off + b->size;
 
     if (after < c->heap_end && BLK(after)->free) {
-        struct Blk *nb = BLK(after);
+        Blk *nb = BLK(after);
 
         if (nb->prev) {
             BLK(nb->prev)->next = nb->next;
-        } else {
+        }
+        else {
             c->free_head = nb->next;
         }
         if (nb->next) {
@@ -278,15 +277,16 @@ void Arena::free(void *p)
     /* Coalesce backward, via the previous block's footer -- the only
      * thing that says where it began. */
     if (off > c->heap) {
-        struct Foot *pf = (struct Foot *)(base + off - FTR);
+        Foot *pf = (Foot *)(base + off - FTR);
         uint32_t prev_off = off - pf->size;
 
         if (prev_off >= c->heap && BLK(prev_off)->free) {
-            struct Blk *pb = BLK(prev_off);
+            Blk *pb = BLK(prev_off);
 
             if (pb->prev) {
                 BLK(pb->prev)->next = pb->next;
-            } else {
+            }
+            else {
                 c->free_head = pb->next;
             }
             if (pb->next) {
@@ -314,9 +314,9 @@ void Arena::retire(void *p, uint64_t now)
         return;
     }
 
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
     uint32_t off = OFF(p) - (uint32_t)HDR;
-    struct Blk *b = BLK(off);
+    Blk *b = BLK(off);
 
     if (b->free) {
         return;
@@ -324,12 +324,12 @@ void Arena::retire(void *p, uint64_t now)
     /* The record goes in the block's own payload. A block big enough to
      * have been allocated is big enough to hold this, because MIN_BLOCK
      * covers the free-list links which are larger. */
-    if (b->size < HDR + sizeof(struct Retired) + FTR) {
+    if (b->size < HDR + sizeof(Retired) + FTR) {
         free(p); /* too small to track; it was never worth reusing */
         return;
     }
 
-    struct Retired *r = (struct Retired *)(base + off + HDR);
+    Retired *r = (Retired *)(base + off + HDR);
 
     r->at = now;
     r->next = c->retire;
@@ -342,7 +342,7 @@ void Arena::reclaim(uint64_t now)
         return;
     }
 
-    struct bncl_ctl *c = ctl();
+    bncl_ctl *c = ctl();
     uint32_t off = c->retire;
     uint32_t keep = NIL;
 
@@ -351,13 +351,14 @@ void Arena::reclaim(uint64_t now)
     /* Walked once, rebuilding the list of those not yet due. Order does
      * not matter: every entry is checked on every pass. */
     while (off != NIL) {
-        struct Retired *r = (struct Retired *)(base + off + HDR);
+        Retired *r = (Retired *)(base + off + HDR);
         uint64_t at = r->at;
         uint32_t next = r->next;
 
         if (now >= at && now - at >= RETIRE_GRACE_NS) {
             free(base + off + HDR);
-        } else {
+        }
+        else {
             r->next = keep;
             keep = off;
         }
@@ -379,7 +380,7 @@ size_t Arena::retired() const
         return 0;
     }
     for (uint32_t off = ctl()->retire; off != NIL;) {
-        struct Retired *r = (struct Retired *)(base + off + HDR);
+        Retired *r = (Retired *)(base + off + HDR);
 
         n++;
         off = r->next;
@@ -387,4 +388,4 @@ size_t Arena::retired() const
     return n;
 }
 
-} // namespace bncld
+} // namespace bncl::daemon

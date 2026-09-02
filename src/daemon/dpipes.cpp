@@ -12,16 +12,15 @@
 
 #include <bpf/bpf.h>
 
-namespace bncld
-{
+namespace bncl::daemon {
 
 bool Pool::makePipe(Pipe &p)
 {
-    struct sockaddr_in addr{};
+    sockaddr_in addr{};
     socklen_t alen = sizeof(addr);
     int cfd, sfd;
 
-    if (getsockname(listen_fd, (struct sockaddr *)&addr, &alen)) {
+    if (getsockname(listen_fd, (sockaddr *)&addr, &alen)) {
         return false;
     }
 
@@ -29,7 +28,7 @@ bool Pool::makePipe(Pipe &p)
     if (cfd < 0) {
         return false;
     }
-    if (connect(cfd, (struct sockaddr *)&addr, sizeof(addr))) {
+    if (connect(cfd, (sockaddr *)&addr, sizeof(addr))) {
         ::close(cfd);
         return false;
     }
@@ -53,7 +52,7 @@ bool Pool::makePipe(Pipe &p)
 
 bool Pool::publish(const Pipe &p)
 {
-    struct dpipe rec{};
+    dpipe rec{};
 
     /* Register the socket first, then describe it, then advertise it. A
      * client that sees the key on the freelist must find both the socket
@@ -76,8 +75,8 @@ bool Pool::publish(const Pipe &p)
 
 bool Pool::init(const PoolMaps &m, size_t count)
 {
-    struct sockaddr_in addr{};
-    struct dpipes_meta meta{};
+    sockaddr_in addr{};
+    dpipes_meta meta{};
     uint32_t zero = 0;
 
     maps = m;
@@ -91,7 +90,7 @@ bool Pool::init(const PoolMaps &m, size_t count)
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0; /* any free port */
-    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) || listen(listen_fd, 64)) {
+    if (bind(listen_fd, (sockaddr *)&addr, sizeof(addr)) || listen(listen_fd, 64)) {
         fprintf(stderr, "pool: listener failed: %s\n", strerror(errno));
         return false;
     }
@@ -129,7 +128,7 @@ bool Pool::init(const PoolMaps &m, size_t count)
 
 bool Pool::release(uint32_t key)
 {
-    struct dpipes_meta meta{};
+    dpipes_meta meta{};
     uint32_t zero = 0;
 
     if (bpf_map_lookup_elem(maps.meta, &zero, &meta)) {
@@ -174,7 +173,7 @@ bool Pool::release(uint32_t key)
 
 uint32_t Pool::freeCount() const
 {
-    struct dpipes_meta meta{};
+    dpipes_meta meta{};
     uint32_t zero = 0;
 
     if (bpf_map_lookup_elem(maps.meta, &zero, &meta)) {
@@ -219,4 +218,4 @@ void Pool::shutdown()
     }
 }
 
-} // namespace bncld
+} // namespace bncl::daemon

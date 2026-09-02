@@ -39,3 +39,4 @@ See architecture.txt for implementation details and design.
 - global `static` variables end in `_s` rather than beginning with `s_`
 - file scope variables should either be `static` or `extern`
 - check CLAUDE.md for updates whenever you modify code.
+- C++ integral casts/coalescing should use `static_cast` if at all necessry.

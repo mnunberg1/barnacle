@@ -39,8 +39,7 @@
 #include <string>
 #include <vector>
 
-namespace bnclagent
-{
+namespace bncl::agent {
 
 /*
  * The capabilities a cached response is stored under.
@@ -152,4 +151,4 @@ bool askStore(int sock, const std::vector<uint8_t> &canonical);
  * would redirect the connection's next write into the daemon. */
 void release(int sock, uint32_t key);
 
-} // namespace bnclagent
+} // namespace bncl::agent

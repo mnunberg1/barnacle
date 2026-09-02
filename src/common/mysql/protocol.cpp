@@ -3,10 +3,8 @@
 
 #include <cstring>
 
-namespace mysql
-{
-namespace
-{
+namespace mysql {
+namespace {
 
 inline uint32_t readU24(const uint8_t *p)
 {
@@ -282,7 +280,8 @@ bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out)
         /* Some servers omit the trailing NUL on the final field. */
         if (readNulString(data, len, pos, plugin)) {
             out.auth_plugin = plugin;
-        } else if (pos < len) {
+        }
+        else if (pos < len) {
             out.auth_plugin.assign((const char *)data + pos, len - pos);
         }
     }
@@ -333,7 +332,8 @@ bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out)
         uint8_t n = data[pos++];
 
         pos += n;
-    } else {
+    }
+    else {
         std::string ignored;
 
         if (!readNulString(data, len, pos, ignored)) {

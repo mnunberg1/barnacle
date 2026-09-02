@@ -56,8 +56,7 @@
 
 #include <frida-gum.h>
 
-namespace
-{
+namespace {
 
 /* --- the originals we replaced ------------------------------------------- */
 
@@ -160,7 +159,7 @@ constexpr uint64_t AGENT_TIMEOUT_NS = 100ull * 1000 * 1000;
 
 uint64_t nowNs()
 {
-    struct timespec ts{};
+    timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
@@ -250,7 +249,7 @@ Conn &connFor(void *ssl)
 void refreshLocked()
 {
     uint64_t now = nowNs();
-    bnclagent::Switches sw{};
+    bncl::agent::Switches sw{};
 
     if (now < next_poll_ns_s) {
         return;
@@ -265,7 +264,7 @@ void refreshLocked()
      * statement back a hundred milliseconds late, once the wait times out
      * and the query is sent for real.
      */
-    if (!bnclagent::daemonAlive()) {
+    if (!bncl::agent::daemonAlive()) {
         if (!daemon_gone_s) {
             fprintf(stderr, "agent: the daemon has gone; passing "
                             "everything through\n");
@@ -282,7 +281,7 @@ void refreshLocked()
      * slots. Keep whatever we last saw rather than guessing: guessing off
      * would silently stop caching, and guessing on would keep asking a
      * daemon that is not there. */
-    if (!bnclagent::cfgRead(sw)) {
+    if (!bncl::agent::cfgRead(sw)) {
         return;
     }
     on_s = sw.client_on != 0;
@@ -378,7 +377,7 @@ bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
             std::vector<uint8_t> canon;
             uint32_t id = 0;
 
-            if (!bnclagent::lookupPayload(sql, canon, id)) {
+            if (!bncl::agent::lookupPayload(sql, canon, id)) {
                 /* Read-through. Let the query run and capture
                  * what comes back, so the next caller hits. */
                 c.pending = sql;
@@ -394,12 +393,12 @@ bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
          * client's own socket, which is the one it was going to wait on
          * anyway. Nothing here waits, because this is the application's
          * thread inside SSL_write. */
-        if (!bnclagent::acquire(sql, sock, c.dpipe)) {
+        if (!bncl::agent::acquire(sql, sock, c.dpipe)) {
             stat_s.pool_empty++;
             continue; /* pool exhausted: let the query through */
         }
-        if (!bnclagent::askLookup(sock)) {
-            bnclagent::release(sock, c.dpipe);
+        if (!bncl::agent::askLookup(sock)) {
+            bncl::agent::release(sock, c.dpipe);
             continue;
         }
 
@@ -412,7 +411,8 @@ bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
         spliced_s[sock] = &c;
         stat_s.asked++;
         return true; /* suppress: the query is the daemon's problem now */
-    } while (c.req.next(sql));
+    }
+    while (c.req.next(sql));
 
     stat_s.passthrough++;
     return false;
@@ -481,7 +481,8 @@ bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
     if (ok_plain && ok_dep) {
         if (plain.rows.size() >= deprecated.rows.size()) {
             out = base;
-        } else {
+        }
+        else {
             out = base | mysql::CLIENT_DEPRECATE_EOF;
         }
         return true;
@@ -551,7 +552,7 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
                 continue;
             }
 
-            std::vector<uint8_t> canon = mysql::encodeResultSet(rs, bnclagent::CANONICAL_CAPS, 1);
+            std::vector<uint8_t> canon = mysql::encodeResultSet(rs, bncl::agent::CANONICAL_CAPS, 1);
 
             /* Read-through: hand the response to the daemon so the
              * next caller hits. Needs its own dpipe -- the one used
@@ -570,11 +571,11 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
              */
             uint32_t key = 0;
 
-            if (bnclagent::acquire(c.pending, c.sock, key)) {
-                if (bnclagent::askStore(c.sock, canon)) {
+            if (bncl::agent::acquire(c.pending, c.sock, key)) {
+                if (bncl::agent::askStore(c.sock, canon)) {
                     stat_s.published++;
                 }
-                bnclagent::release(c.sock, key);
+                bncl::agent::release(c.sock, key);
             }
             c.pending.clear();
         }
@@ -596,8 +597,8 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
  */
 bool takeReply(Conn *c, int fd)
 {
-    bnclagent::Reply r{};
-    struct pollfd pfd = {fd, POLLIN, 0};
+    bncl::agent::Reply r{};
+    pollfd pfd = {fd, POLLIN, 0};
     uint64_t now = nowNs();
     int ms = 0;
 
@@ -653,15 +654,15 @@ size_t settle(void *ssl, Conn &c, void *buf, size_t cap)
 
     /* Give the connection back before anything else: while it is spliced
      * every byte it sends goes to the daemon rather than the server. */
-    bnclagent::release(sock, key);
+    bncl::agent::release(sock, key);
 
-    if (c.status == bnclagent::REPLY_OK && c.caps_known) {
+    if (c.status == bncl::agent::REPLY_OK && c.caps_known) {
         std::vector<uint8_t> canon;
         uint32_t id = 0;
         mysql::ResultSet rs;
 
-        if (bnclagent::lookupPayload(c.pending, canon, id) &&
-            mysql::parseResultSet(canon.data(), canon.size(), bnclagent::CANONICAL_CAPS, rs)) {
+        if (bncl::agent::lookupPayload(c.pending, canon, id) &&
+            mysql::parseResultSet(canon.data(), canon.size(), bncl::agent::CANONICAL_CAPS, rs)) {
             /* Stored canonically, re-framed for THIS connection.
              * Replaying the stored bytes would only work for a
              * connection that negotiated identically and stood at
@@ -975,7 +976,7 @@ extern "C" void bncl_agent_init(const gchar *data, gboolean *stay_resident, gpoi
     /* Every time, not only the first. A daemon restart leaves this agent
      * holding descriptors for maps nobody is serving, and reopening the
      * pins is the whole substance of re-attaching to a new one. */
-    if (!bnclagent::openShared()) {
+    if (!bncl::agent::openShared()) {
         return;
     }
     ready_s = true;
@@ -990,9 +991,9 @@ extern "C" void bncl_agent_init(const gchar *data, gboolean *stay_resident, gpoi
      * IS current -- without this the first poll sees a difference that
      * does not exist and reads the same file again. */
     {
-        bnclagent::Switches sw{};
+        bncl::agent::Switches sw{};
 
-        if (bnclagent::cfgRead(sw)) {
+        if (bncl::agent::cfgRead(sw)) {
             gen_s = sw.generation;
             local_s = sw.local_on != 0;
         }

@@ -3,10 +3,8 @@
 
 #include <cstring>
 
-namespace mysql
-{
-namespace
-{
+namespace mysql {
+namespace {
 
 /* --- writing ------------------------------------------------------------- */
 
@@ -31,15 +29,18 @@ void putLenEnc(std::vector<uint8_t> &v, uint64_t x)
 {
     if (x < 0xFB) {
         v.push_back((uint8_t)x);
-    } else if (x <= 0xFFFF) {
+    }
+    else if (x <= 0xFFFF) {
         v.push_back(0xFC);
         putU16(v, (uint16_t)x);
-    } else if (x <= 0xFFFFFF) {
+    }
+    else if (x <= 0xFFFFFF) {
         v.push_back(0xFD);
         for (int i = 0; i < 3; i++) {
             v.push_back((uint8_t)((x >> (8 * i)) & 0xFF));
         }
-    } else {
+    }
+    else {
         v.push_back(0xFE);
         for (int i = 0; i < 8; i++) {
             v.push_back((uint8_t)((x >> (8 * i)) & 0xFF));
@@ -90,7 +91,8 @@ std::vector<uint8_t> rowPayload(const Row &r)
     for (const Value &v : r) {
         if (!v) {
             p.push_back(0xFB); /* SQL NULL */
-        } else {
+        }
+        else {
             putLenEncStr(p, *v);
         }
     }
@@ -109,7 +111,8 @@ std::vector<uint8_t> terminator(const ResultSet &rs, uint32_t caps)
         putLenEnc(p, 0); /* last_insert_id */
         putU16(p, rs.status);
         putU16(p, rs.warnings);
-    } else {
+    }
+    else {
         putU16(p, rs.warnings);
         putU16(p, rs.status);
     }
@@ -291,7 +294,8 @@ bool parseResultSet(const uint8_t *data, size_t len, uint32_t caps, ResultSet &o
                     out.status = (uint16_t)(d[p] | (d[p + 1] << 8));
                     out.warnings = (uint16_t)(d[p + 2] | (d[p + 3] << 8));
                 }
-            } else if (n >= 5) {
+            }
+            else if (n >= 5) {
                 out.warnings = (uint16_t)(d[1] | (d[2] << 8));
                 out.status = (uint16_t)(d[3] | (d[4] << 8));
             }

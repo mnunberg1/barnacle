@@ -51,7 +51,8 @@ int main(int argc, char **argv)
 
     if (so[0] == '/') {
         path = so;
-    } else {
+    }
+    else {
         char abs[4096];
 
         if (!realpath(so.c_str(), abs)) {

@@ -26,9 +26,25 @@ TabWidth: 4
 ContinuationIndentWidth: 4
 ColumnLimit: 100
 
-# Functions get a brace on their own line; everything else cuddles. This is
-# the kernel convention, and the codebase already follows it.
-BreakBeforeBraces: Linux
+# Functions keep a brace on their own line; namespaces keep it on the same
+# line (`namespace x {`).
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeWhile: true
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
 
 # CLAUDE.md requires braces on every if/else body, including single
 # statements. clang-format cannot add them, but it must not remove them.

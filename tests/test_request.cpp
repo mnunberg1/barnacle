@@ -28,8 +28,7 @@
 #include <string>
 #include <vector>
 
-namespace
-{
+namespace {
 
 /* One wire packet: 3-byte length, sequence id, payload. */
 std::vector<uint8_t> wire(const std::vector<uint8_t> &payload, uint8_t seq = 0)
@@ -410,7 +409,8 @@ TEST(Request, MatchesAgainstTheList)
         if (l.contains(sql)) {
             intercepted.push_back(sql);
         }
-    } while (t.next(sql));
+    }
+    while (t.next(sql));
 
     ASSERT_EQ(intercepted.size(), 1u);
     EXPECT_EQ(intercepted[0], "SELECT * FROM products WHERE category = 'tools'");
@@ -457,7 +457,7 @@ TEST(UclientLayout, StatementFitsTheKeyOrIsNotCacheable)
     /* BNCL_STMT_MAX bounds both the map key and what the filter will copy.
      * A statement at the limit must still round-trip into a key. */
     std::string sql(BNCL_STMT_MAX - 1, 'a');
-    struct stmt_key k{};
+    stmt_key k{};
 
     ASSERT_LE(sql.size(), sizeof(k.text));
     memcpy(k.text, sql.data(), sql.size());
@@ -474,7 +474,7 @@ TEST(UclientLayout, KeyIsZeroPaddedSoEqualTextMeansEqualKey)
     /* The map compares the whole fixed-width key, so any tail bytes left
      * over from a previous statement would make two identical statements
      * hash differently. */
-    struct stmt_key a{}, b{};
+    stmt_key a{}, b{};
     const char *sql = "SELECT 1";
 
     memset(&a, 0xAB, sizeof(a));

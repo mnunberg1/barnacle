@@ -17,11 +17,9 @@
 #include <unordered_set>
 #include <vector>
 
-namespace bncl
-{
+namespace bncl {
 
-class StmtList
-{
+class StmtList {
 public:
     /* Read a list file: one statement per line, `#` comments and blank
      * lines ignored. Returns false and fills `err` if the file cannot be

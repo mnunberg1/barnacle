@@ -48,7 +48,7 @@ std::vector<uint8_t> comQuery(const std::string &sql, uint8_t seq = 0)
 {
     std::vector<uint8_t> p;
 
-    p.push_back(mysql::COM_QUERY);
+    p.push_back(bncl::mysql_proto::COM_QUERY);
     p.insert(p.end(), sql.begin(), sql.end());
     return wire(p, seq);
 }
@@ -77,10 +77,10 @@ TEST(Request, SingleQuery)
     std::vector<uint8_t> buf = comQuery("SELECT 1");
     std::string sql;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_TRUE(t.feed(buf.data(), buf.size(), sql));
     EXPECT_EQ(sql, "SELECT 1");
-    EXPECT_EQ(t.lastCommand(), (uint8_t)mysql::COM_QUERY);
+    EXPECT_EQ(t.lastCommand(), (uint8_t)bncl::mysql_proto::COM_QUERY);
 
     /* Nothing left over. */
     EXPECT_FALSE(t.next(sql));
@@ -95,7 +95,7 @@ TEST(Request, QuerySplitAcrossWrites)
     std::vector<uint8_t> buf = comQuery("SELECT * FROM products");
     std::string sql;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_FALSE(t.feed(buf.data(), 2, sql));
     EXPECT_FALSE(t.feed(buf.data() + 2, 6, sql));
     EXPECT_TRUE(t.feed(buf.data() + 8, buf.size() - 8, sql));
@@ -110,7 +110,7 @@ TEST(Request, ByteAtATime)
     std::string sql;
     bool got = false;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     for (size_t i = 0; i < buf.size(); i++) {
         if (t.feed(buf.data() + i, 1, sql)) {
             got = true;
@@ -129,7 +129,7 @@ TEST(Request, TwoQueriesInOneWrite)
     appendTo(buf, comQuery("SELECT 1"));
     appendTo(buf, comQuery("SELECT 2"));
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_TRUE(t.feed(buf.data(), buf.size(), sql));
     EXPECT_EQ(sql, "SELECT 1");
     /* The second is already buffered -- feed() must be called until it
@@ -141,17 +141,17 @@ TEST(Request, TwoQueriesInOneWrite)
 
 TEST(Request, NonQueryCommandsAreConsumedNotSkipped)
 {
-    /* The alignment case. mysql::COM_PING carries no statement, but its packet
+    /* The alignment case. bncl::mysql_proto::COM_PING carries no statement, but its packet
      * must still be walked -- otherwise the query after it is read from
      * the wrong offset. */
     bncl::RequestTracker t;
     std::vector<uint8_t> buf;
     std::string sql;
 
-    appendTo(buf, wire({mysql::COM_PING}));
+    appendTo(buf, wire({bncl::mysql_proto::COM_PING}));
     appendTo(buf, comQuery("SELECT 3"));
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_TRUE(t.feed(buf.data(), buf.size(), sql));
     EXPECT_EQ(sql, "SELECT 3");
     EXPECT_EQ(t.buffered(), 0u);
@@ -160,12 +160,12 @@ TEST(Request, NonQueryCommandsAreConsumedNotSkipped)
 TEST(Request, QuitIsVisible)
 {
     bncl::RequestTracker t;
-    std::vector<uint8_t> buf = wire({mysql::COM_QUIT});
+    std::vector<uint8_t> buf = wire({bncl::mysql_proto::COM_QUIT});
     std::string sql;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_FALSE(t.feed(buf.data(), buf.size(), sql));
-    EXPECT_EQ(t.lastCommand(), (uint8_t)mysql::COM_QUIT);
+    EXPECT_EQ(t.lastCommand(), (uint8_t)bncl::mysql_proto::COM_QUIT);
 }
 
 TEST(Request, EmptyStatement)
@@ -174,8 +174,8 @@ TEST(Request, EmptyStatement)
     std::vector<uint8_t> buf = comQuery("");
     std::string sql = "stale";
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
-    /* A mysql::COM_QUERY with no text is degenerate but well formed; it must not
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
+    /* A bncl::mysql_proto::COM_QUERY with no text is degenerate but well formed; it must not
      * leave a previous statement in `out` for the caller to act on. */
     if (t.feed(buf.data(), buf.size(), sql)) {
         EXPECT_EQ(sql, "");
@@ -189,7 +189,7 @@ TEST(Request, ResetDiscardsPartialCommand)
     std::vector<uint8_t> buf = comQuery("SELECT 4");
     std::string sql;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     EXPECT_FALSE(t.feed(buf.data(), 6, sql));
     EXPECT_GT(t.buffered(), 0u);
 
@@ -211,7 +211,7 @@ TEST(Request, LargeStatement)
     std::vector<uint8_t> buf = comQuery(big);
     std::string sql;
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     size_t off = 0;
 
     while (off < buf.size() && !t.feed(buf.data() + off, 1000, sql)) {
@@ -400,10 +400,10 @@ TEST(Request, MatchesAgainstTheList)
 
     appendTo(buf, comQuery("SELECT 1"));
     appendTo(buf, comQuery("SELECT * FROM products WHERE category = 'tools'"));
-    appendTo(buf, wire({mysql::COM_PING}));
+    appendTo(buf, wire({bncl::mysql_proto::COM_PING}));
     appendTo(buf, comQuery("SELECT 2"));
 
-    t.begin(mysql::CLIENT_PROTOCOL_41);
+    t.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41);
     t.feed(buf.data(), buf.size(), sql);
     do {
         if (l.contains(sql)) {
@@ -418,7 +418,7 @@ TEST(Request, MatchesAgainstTheList)
 
 /* --- the layout UCLIENT depends on ---------------------------------------
  *
- * The BPF filter cannot use mysql::MessageReader -- it is verifier-bounded and sees
+ * The BPF filter cannot use bncl::mysql_proto::MessageReader -- it is verifier-bounded and sees
  * one buffer, not a stream. It hardcodes the framing instead: a 4-byte header,
  * a command byte, then statement text, with the declared length matching the
  * buffer exactly.
@@ -434,8 +434,8 @@ TEST(UclientLayout, PrefixIsFourByteHeaderPlusCommand)
     std::vector<uint8_t> buf = comQuery("SELECT 1");
 
     /* MYSQL_PREFIX in uclient.bpf.c. */
-    EXPECT_EQ(mysql::kHeaderLen + 1, 5u);
-    EXPECT_EQ(buf[4], (uint8_t)mysql::COM_QUERY);
+    EXPECT_EQ(bncl::mysql_proto::kHeaderLen + 1, 5u);
+    EXPECT_EQ(buf[4], (uint8_t)bncl::mysql_proto::COM_QUERY);
     EXPECT_EQ(std::string(buf.begin() + 5, buf.end()), "SELECT 1");
 }
 
@@ -448,7 +448,7 @@ TEST(UclientLayout, DeclaredLengthMatchesTheWholeBuffer)
     /* key_of() rejects anything where this does not hold -- that is how it
      * tells a whole single packet from a partial write or a continuation,
      * neither of which it can key. */
-    EXPECT_EQ(plen + mysql::kHeaderLen, buf.size());
+    EXPECT_EQ(plen + bncl::mysql_proto::kHeaderLen, buf.size());
     EXPECT_EQ(plen - 1, sql.size());
 }
 

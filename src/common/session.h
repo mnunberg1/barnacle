@@ -84,7 +84,7 @@ public:
     void reset();
 
 private:
-    mysql::MessageReader reader;
+    bncl::mysql_proto::MessageReader reader;
     uint32_t caps = 0;
     uint8_t last_cmd = 0;
     uint8_t last_seq = 0;
@@ -96,7 +96,7 @@ public:
 
     /* Feed one reassembled response message. Returns true once the whole
      * response has been seen. */
-    bool feed(const mysql::Message &msg);
+    bool feed(const bncl::mysql_proto::Message &msg);
 
     bool complete() const
     {
@@ -120,7 +120,7 @@ public:
 private:
     enum class State { Init, ColumnDefs, ColumnEof, Rows, Done };
 
-    void finish(const mysql::Message &msg);
+    void finish(const bncl::mysql_proto::Message &msg);
 
     State state_ = State::Init;
     uint32_t caps_ = 0;
@@ -163,7 +163,7 @@ struct Connection {
     std::string pending_query;
     bool capturing = false;
 
-    mysql::MessageReader response_reader;
+    bncl::mysql_proto::MessageReader response_reader;
     ResponseTracker tracker;
 
     /* Raw response bytes accumulated for a cacheable statement. Stored

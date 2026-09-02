@@ -26,7 +26,7 @@
 #include <string_view>
 #include <vector>
 
-namespace mysql {
+namespace bncl::mysql_proto {
 
 /* Every packet is a 4-byte header (3-byte little-endian payload length, then
  * a 1-byte sequence id) followed by that many payload bytes. */
@@ -253,4 +253,4 @@ bool readLenEnc(const uint8_t *data, size_t len, size_t &pos, uint64_t &out);
 /* Length-encoded string. On success `out` points into `data`. */
 bool readLenEncString(const uint8_t *data, size_t len, size_t &pos, std::string_view &out);
 
-} // namespace mysql
+} // namespace bncl::mysql_proto

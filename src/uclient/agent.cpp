@@ -106,7 +106,7 @@ struct Conn {
      */
     std::string pending;
     std::vector<uint8_t> captured;
-    mysql::MessageReader rd;
+    bncl::mysql_proto::MessageReader rd;
     bool capturing = false;
 
     /* The connection's framing, learned by watching a real response.
@@ -234,7 +234,7 @@ Conn &connFor(void *ssl)
          * which happens before we attach to a live process. Assume the
          * modern set; extractQuery only needs QUERY_ATTRIBUTES to be
          * right, and a wrong guess means a miss, never a wrong hit. */
-        c.req.begin(mysql::CLIENT_PROTOCOL_41 | mysql::CLIENT_TRANSACTIONS);
+        c.req.begin(bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS);
         c.started = true;
     }
     return c;
@@ -334,7 +334,8 @@ bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
          * response is outstanding, and a tracker left mid-stream from
          * an earlier one reports completion at the wrong packet. */
         c.resp.begin(c.caps_known ? c.caps
-                                  : (mysql::CLIENT_PROTOCOL_41 | mysql::CLIENT_TRANSACTIONS));
+                                  : (bncl::mysql_proto::CLIENT_PROTOCOL_41 |
+                                     bncl::mysql_proto::CLIENT_TRANSACTIONS));
 
         if (!on_s) {
             /* Detached. Everything above still runs -- the trackers
@@ -467,11 +468,12 @@ size_t drain(void *ssl, void *buf, size_t cap)
  */
 bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
 {
-    const uint32_t base = mysql::CLIENT_PROTOCOL_41 | mysql::CLIENT_TRANSACTIONS;
-    mysql::ResultSet plain, deprecated;
-    bool ok_plain = mysql::parseResultSet(resp.data(), resp.size(), base, plain);
-    bool ok_dep = mysql::parseResultSet(resp.data(), resp.size(),
-                                        base | mysql::CLIENT_DEPRECATE_EOF, deprecated);
+    const uint32_t base =
+        bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS;
+    bncl::mysql_proto::ResultSet plain, deprecated;
+    bool ok_plain = bncl::mysql_proto::parseResultSet(resp.data(), resp.size(), base, plain);
+    bool ok_dep = bncl::mysql_proto::parseResultSet(
+        resp.data(), resp.size(), base | bncl::mysql_proto::CLIENT_DEPRECATE_EOF, deprecated);
 
     /* Both can "succeed" on the same bytes: without DEPRECATE_EOF there is
      * an extra EOF packet between the definitions and the rows, and a
@@ -483,7 +485,7 @@ bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
             out = base;
         }
         else {
-            out = base | mysql::CLIENT_DEPRECATE_EOF;
+            out = base | bncl::mysql_proto::CLIENT_DEPRECATE_EOF;
         }
         return true;
     }
@@ -492,7 +494,7 @@ bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
         return true;
     }
     if (ok_dep) {
-        out = base | mysql::CLIENT_DEPRECATE_EOF;
+        out = base | bncl::mysql_proto::CLIENT_DEPRECATE_EOF;
         return true;
     }
     return false;
@@ -510,7 +512,7 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
 {
     std::lock_guard<std::mutex> lk(lock_s);
     Conn &c = connFor(ssl);
-    mysql::Message m;
+    bncl::mysql_proto::Message m;
 
     c.sock = sock;
     c.rd.append((const uint8_t *)buf, n);
@@ -546,13 +548,14 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
             /* Re-encode under the canonical capabilities before
              * handing it over, so what is stored does not carry
              * this connection's framing decisions. */
-            mysql::ResultSet rs;
+            bncl::mysql_proto::ResultSet rs;
 
-            if (!mysql::parseResultSet(whole.data(), whole.size(), c.caps, rs)) {
+            if (!bncl::mysql_proto::parseResultSet(whole.data(), whole.size(), c.caps, rs)) {
                 continue;
             }
 
-            std::vector<uint8_t> canon = mysql::encodeResultSet(rs, bncl::agent::CANONICAL_CAPS, 1);
+            std::vector<uint8_t> canon =
+                bncl::mysql_proto::encodeResultSet(rs, bncl::agent::CANONICAL_CAPS, 1);
 
             /* Read-through: hand the response to the daemon so the
              * next caller hits. Needs its own dpipe -- the one used
@@ -659,15 +662,16 @@ size_t settle(void *ssl, Conn &c, void *buf, size_t cap)
     if (c.status == bncl::agent::REPLY_OK && c.caps_known) {
         std::vector<uint8_t> canon;
         uint32_t id = 0;
-        mysql::ResultSet rs;
+        bncl::mysql_proto::ResultSet rs;
 
         if (bncl::agent::lookupPayload(c.pending, canon, id) &&
-            mysql::parseResultSet(canon.data(), canon.size(), bncl::agent::CANONICAL_CAPS, rs)) {
+            bncl::mysql_proto::parseResultSet(canon.data(), canon.size(),
+                                              bncl::agent::CANONICAL_CAPS, rs)) {
             /* Stored canonically, re-framed for THIS connection.
              * Replaying the stored bytes would only work for a
              * connection that negotiated identically and stood at
              * the same sequence id. */
-            c.owed = mysql::encodeResultSet(rs, c.caps, (uint8_t)(c.last_seq + 1));
+            c.owed = bncl::mysql_proto::encodeResultSet(rs, c.caps, (uint8_t)(c.last_seq + 1));
             c.owed_off = 0;
             c.pending.clear();
             stat_s.served++;

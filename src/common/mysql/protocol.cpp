@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-namespace mysql {
+namespace bncl::mysql_proto {
 namespace {
 
 inline uint32_t readU24(const uint8_t *p)
@@ -556,4 +556,4 @@ std::vector<uint8_t> encodeMessage(const uint8_t *payload, size_t len, uint8_t s
     return out;
 }
 
-} // namespace mysql
+} // namespace bncl::mysql_proto

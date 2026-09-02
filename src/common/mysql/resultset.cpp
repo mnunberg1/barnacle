@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-namespace mysql {
+namespace bncl::mysql_proto {
 namespace {
 
 /* --- writing ------------------------------------------------------------- */
@@ -311,4 +311,4 @@ bool parseResultSet(const uint8_t *data, size_t len, uint32_t caps, ResultSet &o
     }
 }
 
-} // namespace mysql
+} // namespace bncl::mysql_proto

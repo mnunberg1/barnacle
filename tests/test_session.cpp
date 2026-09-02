@@ -10,7 +10,7 @@
  *
  * The awkward cases are deliberate rather than exhaustive:
  *
- *   - mysql::CLIENT_DEPRECATE_EOF changes the packet count of an otherwise identical
+ *   - bncl::mysql_proto::CLIENT_DEPRECATE_EOF changes the packet count of an otherwise identical
  *     result set, so the same bytes mean different things depending on what
  *     the two sides negotiated.
  *   - 0xFE is overloaded. Short, it terminates; long, it is an ordinary row
@@ -27,21 +27,22 @@
 
 namespace {
 
-mysql::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1)
+bncl::mysql_proto::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1)
 {
-    mysql::Message m;
+    bncl::mysql_proto::Message m;
 
     m.payload = payload;
     m.first_seq = seq;
     m.last_seq = seq;
-    m.wire_size = payload.size() + mysql::kHeaderLen;
+    m.wire_size = payload.size() + bncl::mysql_proto::kHeaderLen;
     return m;
 }
 
 /* What a real connection negotiates. Status flags are only present on the
  * wire when these are set, so tests that care about transactions have to use
  * them -- with caps of 0 the flags are simply not there to read. */
-const uint32_t kCaps = mysql::CLIENT_PROTOCOL_41 | mysql::CLIENT_TRANSACTIONS;
+const uint32_t kCaps =
+    bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS;
 
 /* OK: 0x00, affected_rows (lenenc), last_insert_id (lenenc), status, warnings. */
 std::vector<uint8_t> okPacket(uint16_t status)
@@ -95,14 +96,15 @@ bncl::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int nco
     for (int i = 0; i < ncols; i++) {
         EXPECT_FALSE(t.feed(msg(columnDef())));
     }
-    if (!(caps & mysql::CLIENT_DEPRECATE_EOF)) {
+    if (!(caps & bncl::mysql_proto::CLIENT_DEPRECATE_EOF)) {
         EXPECT_FALSE(t.feed(msg(eofPacket(0))));
     }
     for (int i = 0; i < nrows; i++) {
         EXPECT_FALSE(t.feed(msg(row())));
     }
-    EXPECT_TRUE(t.feed(msg((caps & mysql::CLIENT_DEPRECATE_EOF) ? okEofPacket(final_status)
-                                                                : eofPacket(final_status))));
+    EXPECT_TRUE(
+        t.feed(msg((caps & bncl::mysql_proto::CLIENT_DEPRECATE_EOF) ? okEofPacket(final_status)
+                                                                    : eofPacket(final_status))));
     return t;
 }
 
@@ -147,7 +149,7 @@ TEST(Session, OpenTransactionIsDetected)
     bncl::ResponseTracker t;
 
     t.begin(kCaps);
-    EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_STATUS_IN_TRANS))));
+    EXPECT_TRUE(t.feed(msg(okPacket(bncl::mysql_proto::SERVER_STATUS_IN_TRANS))));
     EXPECT_TRUE(t.inTransaction());
     /* Not poisoned as such -- the response is well formed. It is the
      * transaction that makes it unsafe to cache, which is the caller's
@@ -161,7 +163,7 @@ TEST(Session, MoreResultsExistsIsPoisoned)
 
     t.begin(kCaps);
     /* Only the first set would be captured, so replay would be truncated. */
-    EXPECT_TRUE(t.feed(msg(okPacket(mysql::SERVER_MORE_RESULTS_EXISTS))));
+    EXPECT_TRUE(t.feed(msg(okPacket(bncl::mysql_proto::SERVER_MORE_RESULTS_EXISTS))));
     EXPECT_TRUE(t.poisoned());
 }
 
@@ -180,7 +182,8 @@ TEST(Session, ResultSetWithDeprecateEof)
 {
     /* Same logical response, one fewer packet. Getting this branch wrong
      * silently mis-counts every result set on a modern connection. */
-    bncl::ResponseTracker t = runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF, 0, 2, 3);
+    bncl::ResponseTracker t =
+        runResultSet(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF, 0, 2, 3);
 
     EXPECT_TRUE(t.complete());
     EXPECT_FALSE(t.poisoned());
@@ -188,8 +191,8 @@ TEST(Session, ResultSetWithDeprecateEof)
 
 TEST(Session, ResultSetInTransaction)
 {
-    bncl::ResponseTracker t =
-        runResultSet(kCaps | mysql::CLIENT_DEPRECATE_EOF, mysql::SERVER_STATUS_IN_TRANS, 1, 1);
+    bncl::ResponseTracker t = runResultSet(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF,
+                                           bncl::mysql_proto::SERVER_STATUS_IN_TRANS, 1, 1);
 
     EXPECT_TRUE(t.complete());
     EXPECT_TRUE(t.inTransaction());
@@ -205,7 +208,7 @@ TEST(Session, LongFeLedPacketIsARowNotATerminator)
 
     fat_row[0] = 0xFE;
 
-    t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
+    t.begin(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF);
     EXPECT_FALSE(t.feed(msg(columnCount(1))));
     EXPECT_FALSE(t.feed(msg(columnDef())));
     EXPECT_FALSE(t.feed(msg(fat_row)));
@@ -220,7 +223,7 @@ TEST(Session, ErrorMidResultSetIsPoisoned)
 {
     bncl::ResponseTracker t;
 
-    t.begin(kCaps | mysql::CLIENT_DEPRECATE_EOF);
+    t.begin(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF);
     EXPECT_FALSE(t.feed(msg(columnCount(1))));
     EXPECT_FALSE(t.feed(msg(columnDef())));
     EXPECT_TRUE(t.feed(msg(errPacket())));
@@ -229,15 +232,15 @@ TEST(Session, ErrorMidResultSetIsPoisoned)
 
 /*
  * Transaction state has to survive a result set on a connection that did NOT
- * mysql::negotiate mysql::CLIENT_DEPRECATE_EOF, where the terminator is a real five-byte
- * EOF rather than an OK packet in EOF clothing.
+ * bncl::mysql_proto::negotiate bncl::mysql_proto::CLIENT_DEPRECATE_EOF, where the terminator is a
+ * real five-byte EOF rather than an OK packet in EOF clothing.
  *
  * This is the case that decides whether caching is safe on such a connection:
  * miss the flag and a response produced inside a transaction looks cacheable.
  */
 TEST(Session, TransactionDetectedFromPlainEofTerminator)
 {
-    bncl::ResponseTracker t = runResultSet(kCaps, mysql::SERVER_STATUS_IN_TRANS, 1, 1);
+    bncl::ResponseTracker t = runResultSet(kCaps, bncl::mysql_proto::SERVER_STATUS_IN_TRANS, 1, 1);
 
     EXPECT_TRUE(t.complete());
     EXPECT_TRUE(t.inTransaction());
@@ -276,7 +279,7 @@ TEST(Connection, ResetClearsPerStatementState)
 {
     bncl::Connection c;
 
-    c.caps = mysql::CLIENT_DEPRECATE_EOF;
+    c.caps = bncl::mysql_proto::CLIENT_DEPRECATE_EOF;
     c.awaiting_response = true;
     c.capturing = true;
     c.pending_query = "SELECT 1";
@@ -290,5 +293,5 @@ TEST(Connection, ResetClearsPerStatementState)
     EXPECT_TRUE(c.captured.empty());
     /* Negotiated capabilities outlive a statement -- they belong to the
      * connection, and re-deriving them is impossible once TLS is up. */
-    EXPECT_EQ(c.caps, (uint32_t)mysql::CLIENT_DEPRECATE_EOF);
+    EXPECT_EQ(c.caps, (uint32_t)bncl::mysql_proto::CLIENT_DEPRECATE_EOF);
 }

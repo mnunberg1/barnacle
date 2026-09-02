@@ -780,14 +780,14 @@ bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body)
     /* Refuse anything that does not parse as a result set. A client should
      * not be able to poison the cache with bytes nobody can replay, and
      * the check is cheap next to the fetch that produced them. */
-    mysql::ResultSet rs;
+    bncl::mysql_proto::ResultSet rs;
 
-    if (!mysql::parseResultSet(body.data(), body.size(), BNCL_CANONICAL_CAPS, rs)) {
+    if (!bncl::mysql_proto::parseResultSet(body.data(), body.size(), BNCL_CANONICAL_CAPS, rs)) {
         fprintf(stderr, "daemon: refusing unparseable response for %.40s\n", sql.c_str());
         cnt.refused++;
         return false;
     }
-    if (rs.status & mysql::SERVER_STATUS_IN_TRANS) {
+    if (rs.status & bncl::mysql_proto::SERVER_STATUS_IN_TRANS) {
         /* Produced inside a transaction: may reflect uncommitted state
          * private to that session. */
         cnt.refused++;

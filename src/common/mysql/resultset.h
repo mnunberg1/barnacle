@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-namespace mysql {
+namespace bncl::mysql_proto {
 
 /* Protocol::ColumnDefinition41. Every field is kept, including the ones this
  * project never reads: they go back on the wire verbatim, and a client is
@@ -83,4 +83,4 @@ bool parseResultSet(const uint8_t *data, size_t len, uint32_t caps, ResultSet &o
  */
 std::vector<uint8_t> encodeResultSet(const ResultSet &rs, uint32_t caps, uint8_t seq);
 
-} // namespace mysql
+} // namespace bncl::mysql_proto

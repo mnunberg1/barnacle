@@ -28,7 +28,7 @@ bool RequestTracker::feed(const uint8_t *data, size_t len, std::string &out)
 
 bool RequestTracker::next(std::string &out)
 {
-    mysql::Message m;
+    bncl::mysql_proto::Message m;
 
     while (reader.next(m)) {
         if (m.payload.empty()) {
@@ -39,14 +39,14 @@ bool RequestTracker::next(std::string &out)
 
         std::string_view q;
 
-        /* Anything that is not a mysql::COM_QUERY is consumed and skipped.
+        /* Anything that is not a bncl::mysql_proto::COM_QUERY is consumed and skipped.
          * Skipping means "having parsed it", not "having ignored the
          * bytes" -- the reader has already advanced past the whole
          * packet, which is what keeps the stream aligned. */
-        if (m.payload[0] != mysql::COM_QUERY) {
+        if (m.payload[0] != bncl::mysql_proto::COM_QUERY) {
             continue;
         }
-        if (!mysql::extractQuery(m.payload.data(), m.payload.size(), caps, q)) {
+        if (!bncl::mysql_proto::extractQuery(m.payload.data(), m.payload.size(), caps, q)) {
             continue;
         }
         out.assign(q.data(), q.size());
@@ -66,9 +66,9 @@ void ResponseTracker::begin(uint32_t caps)
 
 /* Pull the transaction flag out of the terminating packet. This is the whole
  * reason the tracker bothers walking to the end of a result set rather than
- * just counting bytes: mysql::SERVER_STATUS_IN_TRANS decides whether the response
+ * just counting bytes: bncl::mysql_proto::SERVER_STATUS_IN_TRANS decides whether the response
  * may be cached at all. */
-void ResponseTracker::finish(const mysql::Message &msg)
+void ResponseTracker::finish(const bncl::mysql_proto::Message &msg)
 {
     const uint8_t *p = msg.payload.data();
     size_t n = msg.payload.size();
@@ -76,27 +76,27 @@ void ResponseTracker::finish(const mysql::Message &msg)
     bool got = false;
 
     /* Which terminator this is depends on what the two sides negotiated.
-     * Without mysql::CLIENT_DEPRECATE_EOF it is a real five-byte EOF, whose layout
+     * Without bncl::mysql_proto::CLIENT_DEPRECATE_EOF it is a real five-byte EOF, whose layout
      * differs from OK -- warnings come BEFORE the status flags, not after.
-     * mysql::parseOk() cannot read it: it happens to find the status at the right
+     * bncl::mysql_proto::parseOk() cannot read it: it happens to find the status at the right
      * offset and then fails on a trailing field EOF does not have, throwing
      * the answer away. */
-    if (n >= 1 && p[0] == 0xFE && n < 9 && !(caps_ & mysql::CLIENT_DEPRECATE_EOF)) {
-        mysql::EofPacket eof;
+    if (n >= 1 && p[0] == 0xFE && n < 9 && !(caps_ & bncl::mysql_proto::CLIENT_DEPRECATE_EOF)) {
+        bncl::mysql_proto::EofPacket eof;
 
-        got = mysql::parseEof(p, n, eof);
+        got = bncl::mysql_proto::parseEof(p, n, eof);
         status = eof.status_flags;
     }
     else {
-        mysql::OkPacket ok;
+        bncl::mysql_proto::OkPacket ok;
 
-        got = mysql::parseOk(p, n, caps_, ok);
+        got = bncl::mysql_proto::parseOk(p, n, caps_, ok);
         status = ok.status_flags;
     }
 
     if (got) {
-        in_transaction_ = (status & mysql::SERVER_STATUS_IN_TRANS) != 0;
-        if (status & mysql::SERVER_MORE_RESULTS_EXISTS) {
+        in_transaction_ = (status & bncl::mysql_proto::SERVER_STATUS_IN_TRANS) != 0;
+        if (status & bncl::mysql_proto::SERVER_MORE_RESULTS_EXISTS) {
             /* Multi-result-set responses need every set captured to
              * replay correctly. Out of scope; refuse to cache
              * rather than store a truncated answer. */
@@ -106,7 +106,7 @@ void ResponseTracker::finish(const mysql::Message &msg)
     state_ = State::Done;
 }
 
-bool ResponseTracker::feed(const mysql::Message &msg)
+bool ResponseTracker::feed(const bncl::mysql_proto::Message &msg)
 {
     const uint8_t *p = msg.payload.data();
     size_t n = msg.payload.size();
@@ -120,30 +120,30 @@ bool ResponseTracker::feed(const mysql::Message &msg)
 
     switch (state_) {
     case State::Init: {
-        mysql::ResponseKind kind = mysql::classifyResponse(p, n, caps_);
+        bncl::mysql_proto::ResponseKind kind = bncl::mysql_proto::classifyResponse(p, n, caps_);
 
         switch (kind) {
-        case mysql::ResponseKind::Ok:
+        case bncl::mysql_proto::ResponseKind::Ok:
             finish(msg);
             return true;
-        case mysql::ResponseKind::Err:
+        case bncl::mysql_proto::ResponseKind::Err:
             /* Errors are cheap to reproduce and may be
              * session-specific; never cache them. */
             poisoned_ = true;
             state_ = State::Done;
             return true;
-        case mysql::ResponseKind::LocalInfile:
+        case bncl::mysql_proto::ResponseKind::LocalInfile:
             poisoned_ = true;
             state_ = State::Done;
             return true;
-        case mysql::ResponseKind::Eof:
+        case bncl::mysql_proto::ResponseKind::Eof:
             finish(msg);
             return true;
-        case mysql::ResponseKind::ResultSet: {
+        case bncl::mysql_proto::ResponseKind::ResultSet: {
             size_t pos = 0;
             uint64_t cols = 0;
 
-            if (!mysql::readLenEnc(p, n, pos, cols) || cols == 0) {
+            if (!bncl::mysql_proto::readLenEnc(p, n, pos, cols) || cols == 0) {
                 poisoned_ = true;
                 state_ = State::Done;
                 return true;
@@ -164,9 +164,10 @@ bool ResponseTracker::feed(const mysql::Message &msg)
             columns_left_--;
         }
         if (columns_left_ == 0) {
-            /* With mysql::CLIENT_DEPRECATE_EOF there is no EOF packet
+            /* With bncl::mysql_proto::CLIENT_DEPRECATE_EOF there is no EOF packet
              * between the column definitions and the rows. */
-            state_ = (caps_ & mysql::CLIENT_DEPRECATE_EOF) ? State::Rows : State::ColumnEof;
+            state_ =
+                (caps_ & bncl::mysql_proto::CLIENT_DEPRECATE_EOF) ? State::Rows : State::ColumnEof;
         }
         return false;
 

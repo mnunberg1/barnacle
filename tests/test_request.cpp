@@ -31,8 +31,7 @@
 namespace {
 
 /* One wire packet: 3-byte length, sequence id, payload. */
-std::vector<uint8_t> wire(const std::vector<uint8_t> &payload, uint8_t seq = 0)
-{
+std::vector<uint8_t> wire(const std::vector<uint8_t> &payload, uint8_t seq = 0) {
     std::vector<uint8_t> v;
     uint32_t n = (uint32_t)payload.size();
 
@@ -44,8 +43,7 @@ std::vector<uint8_t> wire(const std::vector<uint8_t> &payload, uint8_t seq = 0)
     return v;
 }
 
-std::vector<uint8_t> comQuery(const std::string &sql, uint8_t seq = 0)
-{
+std::vector<uint8_t> comQuery(const std::string &sql, uint8_t seq = 0) {
     std::vector<uint8_t> p;
 
     p.push_back(bncl::mysql_proto::COM_QUERY);
@@ -53,14 +51,12 @@ std::vector<uint8_t> comQuery(const std::string &sql, uint8_t seq = 0)
     return wire(p, seq);
 }
 
-void appendTo(std::vector<uint8_t> &dst, const std::vector<uint8_t> &src)
-{
+void appendTo(std::vector<uint8_t> &dst, const std::vector<uint8_t> &src) {
     dst.insert(dst.end(), src.begin(), src.end());
 }
 
 /* A throwaway file, so the list loader is tested against a real one. */
-std::string writeTemp(const std::string &body)
-{
+std::string writeTemp(const std::string &body) {
     std::string path = "/tmp/bncl_stmtlist_test.txt";
     std::ofstream f(path, std::ios::trunc);
 
@@ -71,8 +67,7 @@ std::string writeTemp(const std::string &body)
 
 } // namespace
 
-TEST(Request, SingleQuery)
-{
+TEST(Request, SingleQuery) {
     bncl::RequestTracker t;
     std::vector<uint8_t> buf = comQuery("SELECT 1");
     std::string sql;
@@ -87,8 +82,7 @@ TEST(Request, SingleQuery)
     EXPECT_EQ(t.buffered(), 0u);
 }
 
-TEST(Request, QuerySplitAcrossWrites)
-{
+TEST(Request, QuerySplitAcrossWrites) {
     /* The case a per-buffer matcher gets wrong: one command delivered in
      * three SSL_write calls, including a header split mid-length-field. */
     bncl::RequestTracker t;
@@ -102,8 +96,7 @@ TEST(Request, QuerySplitAcrossWrites)
     EXPECT_EQ(sql, "SELECT * FROM products");
 }
 
-TEST(Request, ByteAtATime)
-{
+TEST(Request, ByteAtATime) {
     /* The degenerate version of the same thing. */
     bncl::RequestTracker t;
     std::vector<uint8_t> buf = comQuery("SELECT 2");
@@ -120,8 +113,7 @@ TEST(Request, ByteAtATime)
     EXPECT_EQ(sql, "SELECT 2");
 }
 
-TEST(Request, TwoQueriesInOneWrite)
-{
+TEST(Request, TwoQueriesInOneWrite) {
     bncl::RequestTracker t;
     std::vector<uint8_t> buf;
     std::string sql;
@@ -139,8 +131,7 @@ TEST(Request, TwoQueriesInOneWrite)
     EXPECT_FALSE(t.next(sql));
 }
 
-TEST(Request, NonQueryCommandsAreConsumedNotSkipped)
-{
+TEST(Request, NonQueryCommandsAreConsumedNotSkipped) {
     /* The alignment case. bncl::mysql_proto::COM_PING carries no statement, but its packet
      * must still be walked -- otherwise the query after it is read from
      * the wrong offset. */
@@ -157,8 +148,7 @@ TEST(Request, NonQueryCommandsAreConsumedNotSkipped)
     EXPECT_EQ(t.buffered(), 0u);
 }
 
-TEST(Request, QuitIsVisible)
-{
+TEST(Request, QuitIsVisible) {
     bncl::RequestTracker t;
     std::vector<uint8_t> buf = wire({bncl::mysql_proto::COM_QUIT});
     std::string sql;
@@ -168,8 +158,7 @@ TEST(Request, QuitIsVisible)
     EXPECT_EQ(t.lastCommand(), (uint8_t)bncl::mysql_proto::COM_QUIT);
 }
 
-TEST(Request, EmptyStatement)
-{
+TEST(Request, EmptyStatement) {
     bncl::RequestTracker t;
     std::vector<uint8_t> buf = comQuery("");
     std::string sql = "stale";
@@ -183,8 +172,7 @@ TEST(Request, EmptyStatement)
     EXPECT_EQ(t.buffered(), 0u);
 }
 
-TEST(Request, ResetDiscardsPartialCommand)
-{
+TEST(Request, ResetDiscardsPartialCommand) {
     bncl::RequestTracker t;
     std::vector<uint8_t> buf = comQuery("SELECT 4");
     std::string sql;
@@ -202,8 +190,7 @@ TEST(Request, ResetDiscardsPartialCommand)
     EXPECT_EQ(sql, "SELECT 4");
 }
 
-TEST(Request, LargeStatement)
-{
+TEST(Request, LargeStatement) {
     /* Comfortably past a single MTU and past the 512-byte key limit, to
      * make sure reassembly is not quietly bounded somewhere. */
     bncl::RequestTracker t;
@@ -226,8 +213,7 @@ TEST(Request, LargeStatement)
 
 /* --- the intercept list --------------------------------------------------- */
 
-TEST(StmtList, ExactMatchOnly)
-{
+TEST(StmtList, ExactMatchOnly) {
     bncl::StmtList l;
 
     l.add("SELECT id FROM t WHERE id = 5");
@@ -242,8 +228,7 @@ TEST(StmtList, ExactMatchOnly)
     EXPECT_FALSE(l.contains("SELECT id  FROM t WHERE id = 5"));
 }
 
-TEST(StmtList, LoadsFileSkippingCommentsAndBlanks)
-{
+TEST(StmtList, LoadsFileSkippingCommentsAndBlanks) {
     std::string path = writeTemp("# a comment\n"
                                  "\n"
                                  "SELECT 1\n"
@@ -265,8 +250,7 @@ TEST(StmtList, LoadsFileSkippingCommentsAndBlanks)
     std::remove(path.c_str());
 }
 
-TEST(StmtList, DuplicatesCollapse)
-{
+TEST(StmtList, DuplicatesCollapse) {
     std::string path = writeTemp("SELECT 1\nSELECT 1\nSELECT 2\n");
     bncl::StmtList l;
     std::string err;
@@ -280,8 +264,7 @@ TEST(StmtList, DuplicatesCollapse)
     std::remove(path.c_str());
 }
 
-TEST(StmtList, MissingFileIsAnError)
-{
+TEST(StmtList, MissingFileIsAnError) {
     bncl::StmtList l;
     std::string err;
 
@@ -291,8 +274,7 @@ TEST(StmtList, MissingFileIsAnError)
     EXPECT_FALSE(err.empty());
 }
 
-TEST(StmtList, MatchesTheShippedDemoList)
-{
+TEST(StmtList, MatchesTheShippedDemoList) {
     /* The five slow statements the demo client issues, and nothing else.
      *
      * Checked against slow-queries.list rather than cache.list because
@@ -312,8 +294,7 @@ TEST(StmtList, MatchesTheShippedDemoList)
     EXPECT_TRUE(l.contains("SELECT * FROM category_margin"));
 }
 
-TEST(StmtList, DemoListNamesStatementsTheDemoClientIssues)
-{
+TEST(StmtList, DemoListNamesStatementsTheDemoClientIssues) {
     /*
      * Matching is byte for byte, so a demo list naming a statement the
      * client never sends produces a demo that attaches, reports success,
@@ -344,8 +325,7 @@ TEST(StmtList, DemoListNamesStatementsTheDemoClientIssues)
     }
 }
 
-TEST(StmtList, DemoListCachesOnlyStatementsThatCostSomething)
-{
+TEST(StmtList, DemoListCachesOnlyStatementsThatCostSomething) {
     /*
      * The five listed statements are the five SLOW ones, not an arbitrary
      * five. Slowness in this demo is a property of the object being
@@ -387,8 +367,7 @@ TEST(StmtList, DemoListCachesOnlyStatementsThatCostSomething)
 
 /* --- the two halves together ---------------------------------------------- */
 
-TEST(Request, MatchesAgainstTheList)
-{
+TEST(Request, MatchesAgainstTheList) {
     /* What UCLIENT actually does: reassemble, then decide. */
     bncl::StmtList l;
     bncl::RequestTracker t;
@@ -429,8 +408,7 @@ TEST(Request, MatchesAgainstTheList)
  * which is why it is worth a test rather than a comment.
  */
 
-TEST(UclientLayout, PrefixIsFourByteHeaderPlusCommand)
-{
+TEST(UclientLayout, PrefixIsFourByteHeaderPlusCommand) {
     std::vector<uint8_t> buf = comQuery("SELECT 1");
 
     /* MYSQL_PREFIX in uclient.bpf.c. */
@@ -439,8 +417,7 @@ TEST(UclientLayout, PrefixIsFourByteHeaderPlusCommand)
     EXPECT_EQ(std::string(buf.begin() + 5, buf.end()), "SELECT 1");
 }
 
-TEST(UclientLayout, DeclaredLengthMatchesTheWholeBuffer)
-{
+TEST(UclientLayout, DeclaredLengthMatchesTheWholeBuffer) {
     const std::string sql = "SELECT * FROM products";
     std::vector<uint8_t> buf = comQuery(sql);
     uint32_t plen = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16);
@@ -452,8 +429,7 @@ TEST(UclientLayout, DeclaredLengthMatchesTheWholeBuffer)
     EXPECT_EQ(plen - 1, sql.size());
 }
 
-TEST(UclientLayout, StatementFitsTheKeyOrIsNotCacheable)
-{
+TEST(UclientLayout, StatementFitsTheKeyOrIsNotCacheable) {
     /* BNCL_STMT_MAX bounds both the map key and what the filter will copy.
      * A statement at the limit must still round-trip into a key. */
     std::string sql(BNCL_STMT_MAX - 1, 'a');
@@ -469,8 +445,7 @@ TEST(UclientLayout, StatementFitsTheKeyOrIsNotCacheable)
     EXPECT_GT(sql.size() + 1, sizeof(k.text) - 1);
 }
 
-TEST(UclientLayout, KeyIsZeroPaddedSoEqualTextMeansEqualKey)
-{
+TEST(UclientLayout, KeyIsZeroPaddedSoEqualTextMeansEqualKey) {
     /* The map compares the whole fixed-width key, so any tail bytes left
      * over from a previous statement would make two identical statements
      * hash differently. */

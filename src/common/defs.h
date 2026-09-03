@@ -254,8 +254,7 @@ typedef __u64 stmt_ref; /* arena address of a struct stmt, 0 for none */
  * references and a refcount protocol implemented twice is a refcount protocol
  * that will eventually disagree with itself.
  */
-static inline int bncl_stmt_get(struct stmt *st)
-{
+static inline int bncl_stmt_get(struct stmt *st) {
     __u32 cur = __atomic_load_n(&st->stmt_refs, __ATOMIC_ACQUIRE);
 
     while (cur != 0) {
@@ -269,8 +268,7 @@ static inline int bncl_stmt_get(struct stmt *st)
 
 /* Drop a reference. Returns non-zero if this was the last one, which makes
  * the caller responsible for retiring the record. */
-static inline int bncl_stmt_put(struct stmt *st)
-{
+static inline int bncl_stmt_put(struct stmt *st) {
     return __atomic_sub_fetch(&st->stmt_refs, 1, __ATOMIC_ACQ_REL) == 0;
 }
 #endif /* __bpf__ */

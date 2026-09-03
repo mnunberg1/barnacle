@@ -43,6 +43,10 @@ struct Pipe {
     uint32_t key = 0; /* index in dpipe_map, dpipes and the freelist */
     int sfd = -1;     /* the daemon's i/o end; this is what dpipe_map holds */
     int cfd = -1;     /* far end, held open only to keep the connection up */
+    void close();     // close the pipe's FDs, setting them to -1
+    ~Pipe() {
+        close();
+    }
 };
 
 /* The map descriptors the pool needs. Grouped so the daemon can hand them
@@ -62,17 +66,13 @@ public:
     bool init(const PoolMaps &m, size_t count);
     void shutdown();
 
-    size_t size() const
-    {
+    size_t size() const {
         return pipes.size();
     }
 
     /* The pipe behind a key, or nullptr. The daemon needs this to turn the
      * key a client published back into something it can write to. */
     Pipe *byKey(uint32_t key);
-
-    /* Every sfd, for the daemon's epoll set. */
-    std::vector<int> fds() const;
 
     /* Put a key back on the freelist and clear its splice. Called when a
      * request finishes; leaving it spliced would redirect a later,

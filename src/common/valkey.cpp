@@ -24,8 +24,7 @@ namespace {
 ssize_t (*raw_read)(int, void *, size_t);
 ssize_t (*raw_write)(int, const void *, size_t);
 
-void initRaw()
-{
+void initRaw() {
     if (raw_read) {
         return;
     }
@@ -39,13 +38,11 @@ void initRaw()
 
 } // namespace
 
-Valkey::~Valkey()
-{
+Valkey::~Valkey() {
     disconnect();
 }
 
-void Valkey::disconnect()
-{
+void Valkey::disconnect() {
     if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;
@@ -53,8 +50,7 @@ void Valkey::disconnect()
     inbuf_.clear();
 }
 
-bool Valkey::connect(const std::string &host, uint16_t port)
-{
+bool Valkey::connect(const std::string &host, uint16_t port) {
     addrinfo hints{};
     addrinfo *res = nullptr;
     char portstr[16];
@@ -94,8 +90,7 @@ bool Valkey::connect(const std::string &host, uint16_t port)
     return true;
 }
 
-bool Valkey::sendCommand(const std::vector<std::string> &args)
-{
+bool Valkey::sendCommand(const std::vector<std::string> &args) {
     std::string out = "*" + std::to_string(args.size()) + "\r\n";
 
     for (const auto &a : args) {
@@ -121,8 +116,7 @@ bool Valkey::sendCommand(const std::vector<std::string> &args)
     return true;
 }
 
-bool Valkey::readLine(std::string &line)
-{
+bool Valkey::readLine(std::string &line) {
     for (;;) {
         size_t nl = inbuf_.find("\r\n");
 
@@ -146,8 +140,7 @@ bool Valkey::readLine(std::string &line)
     }
 }
 
-bool Valkey::readExactly(size_t want, std::vector<uint8_t> &out)
-{
+bool Valkey::readExactly(size_t want, std::vector<uint8_t> &out) {
     while (inbuf_.size() < want) {
         char tmp[8192];
         ssize_t n = raw_read(fd_, tmp, sizeof(tmp));
@@ -166,8 +159,7 @@ bool Valkey::readExactly(size_t want, std::vector<uint8_t> &out)
     return true;
 }
 
-bool Valkey::get(const std::string &key, std::vector<uint8_t> &out)
-{
+bool Valkey::get(const std::string &key, std::vector<uint8_t> &out) {
     std::string line;
 
     if (fd_ < 0 && !connect(host_, port_)) {
@@ -204,8 +196,7 @@ bool Valkey::get(const std::string &key, std::vector<uint8_t> &out)
     return false;
 }
 
-bool Valkey::dbsize(long &out)
-{
+bool Valkey::dbsize(long &out) {
     std::string line;
 
     if (fd_ < 0 && !connect(host_, port_)) {
@@ -221,8 +212,7 @@ bool Valkey::dbsize(long &out)
     return true;
 }
 
-bool Valkey::setex(const std::string &key, const std::vector<uint8_t> &val, int ttl_secs)
-{
+bool Valkey::setex(const std::string &key, const std::vector<uint8_t> &val, int ttl_secs) {
     std::string line;
     std::string body((const char *)val.data(), val.size());
 

@@ -3,31 +3,27 @@
 
 namespace bncl {
 
-void RequestTracker::begin(uint32_t c)
-{
+void RequestTracker::begin(uint32_t c) {
     caps = c;
     last_cmd = 0;
     last_seq = 0;
     reader.reset();
 }
 
-void RequestTracker::reset()
-{
+void RequestTracker::reset() {
     last_cmd = 0;
     last_seq = 0;
     reader.reset();
 }
 
-bool RequestTracker::feed(const uint8_t *data, size_t len, std::string &out)
-{
+bool RequestTracker::feed(const uint8_t *data, size_t len, std::string &out) {
     if (data && len) {
         reader.append(data, len);
     }
     return next(out);
 }
 
-bool RequestTracker::next(std::string &out)
-{
+bool RequestTracker::next(std::string &out) {
     bncl::mysql_proto::Message m;
 
     while (reader.next(m)) {
@@ -55,8 +51,7 @@ bool RequestTracker::next(std::string &out)
     return false;
 }
 
-void ResponseTracker::begin(uint32_t caps)
-{
+void ResponseTracker::begin(uint32_t caps) {
     state_ = State::Init;
     caps_ = caps;
     columns_left_ = 0;
@@ -68,8 +63,7 @@ void ResponseTracker::begin(uint32_t caps)
  * reason the tracker bothers walking to the end of a result set rather than
  * just counting bytes: bncl::mysql_proto::SERVER_STATUS_IN_TRANS decides whether the response
  * may be cached at all. */
-void ResponseTracker::finish(const bncl::mysql_proto::Message &msg)
-{
+void ResponseTracker::finish(const bncl::mysql_proto::Message &msg) {
     const uint8_t *p = msg.payload.data();
     size_t n = msg.payload.size();
     uint16_t status = 0;
@@ -106,8 +100,7 @@ void ResponseTracker::finish(const bncl::mysql_proto::Message &msg)
     state_ = State::Done;
 }
 
-bool ResponseTracker::feed(const bncl::mysql_proto::Message &msg)
-{
+bool ResponseTracker::feed(const bncl::mysql_proto::Message &msg) {
     const uint8_t *p = msg.payload.data();
     size_t n = msg.payload.size();
 

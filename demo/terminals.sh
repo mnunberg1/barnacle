@@ -39,8 +39,8 @@ SESSION=barnacle
 TITLE1="MySQL - what reaches the server"
 CMD1="demo/mysql-tail.sh"
 
-TITLE2="Valkey - MONITOR"
-CMD2="docker exec -it bncl-valkey valkey-cli monitor"
+TITLE2="Valkey - what reaches the cache"
+CMD2="demo/valkey-tail.sh"
 
 TITLE3="Client - latency, live  (+/- repaint rate)"
 # attach rather than `logs -f`, so keystrokes reach the client and +/- can

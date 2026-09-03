@@ -18,8 +18,7 @@
 #include <vector>
 
 /* Build a single wire packet. */
-static std::vector<uint8_t> pkt(const std::vector<uint8_t> &payload, uint8_t seq)
-{
+static std::vector<uint8_t> pkt(const std::vector<uint8_t> &payload, uint8_t seq) {
     std::vector<uint8_t> v;
     uint32_t n = (uint32_t)payload.size();
 
@@ -31,8 +30,7 @@ static std::vector<uint8_t> pkt(const std::vector<uint8_t> &payload, uint8_t seq
     return v;
 }
 
-TEST(Protocol, LenEnc)
-{
+TEST(Protocol, LenEnc) {
     /* 1-byte form */
     {
         const uint8_t d[] = {0x05};
@@ -73,8 +71,7 @@ TEST(Protocol, LenEnc)
     }
 }
 
-TEST(Protocol, ReaderBasic)
-{
+TEST(Protocol, ReaderBasic) {
     bncl::mysql_proto::MessageReader r;
     bncl::mysql_proto::Message m;
     auto p = pkt({0x03, 'S', 'E', 'L'}, 0);
@@ -90,8 +87,7 @@ TEST(Protocol, ReaderBasic)
 /* A packet split across several append() calls must not be emitted early --
  * this is the case that occurs constantly in reality, because neither recv()
  * nor SSL_read respects message boundaries. */
-TEST(Protocol, ReaderSplit)
-{
+TEST(Protocol, ReaderSplit) {
     bncl::mysql_proto::MessageReader r;
     bncl::mysql_proto::Message m;
     auto p = pkt({0x03, 'a', 'b', 'c', 'd'}, 7);
@@ -107,8 +103,7 @@ TEST(Protocol, ReaderSplit)
 }
 
 /* Several packets delivered in one append() must all be recoverable. */
-TEST(Protocol, ReaderMultiple)
-{
+TEST(Protocol, ReaderMultiple) {
     bncl::mysql_proto::MessageReader r;
     bncl::mysql_proto::Message m;
     auto a = pkt({1}, 0);
@@ -128,8 +123,7 @@ TEST(Protocol, ReaderMultiple)
 
 /* The >=16 MiB continuation rule: a full-size packet means "more follows".
  * The old BPF implementation never handled this at all. */
-TEST(Protocol, ReaderContinuation)
-{
+TEST(Protocol, ReaderContinuation) {
     bncl::mysql_proto::MessageReader r;
     bncl::mysql_proto::Message m;
     std::vector<uint8_t> big(bncl::mysql_proto::kMaxPayload, 'x');
@@ -147,8 +141,7 @@ TEST(Protocol, ReaderContinuation)
 
 /* A message that is an exact multiple of bncl::mysql_proto::kMaxPayload is terminated by a
  * zero-length packet. Getting this wrong hangs the parser forever. */
-TEST(Protocol, ReaderExactMultiple)
-{
+TEST(Protocol, ReaderExactMultiple) {
     bncl::mysql_proto::MessageReader r;
     bncl::mysql_proto::Message m;
     std::vector<uint8_t> big(bncl::mysql_proto::kMaxPayload, 'y');
@@ -162,8 +155,7 @@ TEST(Protocol, ReaderExactMultiple)
     EXPECT_EQ(m.payload.size(), (size_t)bncl::mysql_proto::kMaxPayload);
 }
 
-TEST(Protocol, EncodeRoundtrip)
-{
+TEST(Protocol, EncodeRoundtrip) {
     std::vector<uint8_t> payload(70000, 'z');
     auto wire = bncl::mysql_proto::encodeMessage(payload.data(), payload.size(), 3);
     bncl::mysql_proto::MessageReader r;
@@ -178,8 +170,7 @@ TEST(Protocol, EncodeRoundtrip)
 
 /* Renumbering is what makes a cached response replayable onto a connection
  * whose sequence counter sits somewhere else. */
-TEST(Protocol, Renumber)
-{
+TEST(Protocol, Renumber) {
     auto a = pkt({1}, 0);
     auto b = pkt({2}, 1);
     auto c = pkt({3}, 2);
@@ -205,8 +196,7 @@ TEST(Protocol, Renumber)
     EXPECT_TRUE(!bncl::mysql_proto::renumber(bad, 0));
 }
 
-TEST(Protocol, ExtractQuery)
-{
+TEST(Protocol, ExtractQuery) {
     const char *sql = "SELECT 1";
 
     /* Plain bncl::mysql_proto::COM_QUERY. */
@@ -264,8 +254,7 @@ TEST(Protocol, ExtractQuery)
 /* 0xFE is overloaded, and the disambiguation depends on both length and the
  * negotiated bncl::mysql_proto::CLIENT_DEPRECATE_EOF. Getting this wrong corrupts result-set
  * parsing in ways that only show up on some servers. */
-TEST(Protocol, Classify)
-{
+TEST(Protocol, Classify) {
     {
         const uint8_t d[] = {0xFF, 0x00, 0x04};
 
@@ -299,8 +288,7 @@ TEST(Protocol, Classify)
 }
 
 /* bncl::mysql_proto::SERVER_STATUS_IN_TRANS is the flag that gates caching entirely. */
-TEST(Protocol, ParseOkTransactionFlag)
-{
+TEST(Protocol, ParseOkTransactionFlag) {
     /* OK, affected_rows=0, last_insert_id=0, status=IN_TRANS, warnings=0 */
     const uint8_t in_trans[] = {0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00};
     bncl::mysql_proto::OkPacket ok;
@@ -321,8 +309,7 @@ TEST(Protocol, ParseOkTransactionFlag)
  * length distinction is the reliable TLS-upgrade signal -- far better than
  * inferring encryption from whether later bytes parse as MySQL, since the
  * server greeting is plaintext on every connection including TLS ones. */
-TEST(Protocol, ClientHandshakeSSLRequest)
-{
+TEST(Protocol, ClientHandshakeSSLRequest) {
     std::vector<uint8_t> p(32, 0);
     uint32_t caps = bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_SSL;
 

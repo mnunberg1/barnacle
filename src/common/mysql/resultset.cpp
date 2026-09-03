@@ -8,14 +8,12 @@ namespace {
 
 /* --- writing ------------------------------------------------------------- */
 
-void putU16(std::vector<uint8_t> &v, uint16_t x)
-{
+void putU16(std::vector<uint8_t> &v, uint16_t x) {
     v.push_back((uint8_t)(x & 0xFF));
     v.push_back((uint8_t)(x >> 8));
 }
 
-void putU32(std::vector<uint8_t> &v, uint32_t x)
-{
+void putU32(std::vector<uint8_t> &v, uint32_t x) {
     for (int i = 0; i < 4; i++) {
         v.push_back((uint8_t)((x >> (8 * i)) & 0xFF));
     }
@@ -25,8 +23,7 @@ void putU32(std::vector<uint8_t> &v, uint32_t x)
  * 0xFB must use the one-byte form -- the wider forms are legal encodings of
  * the same number but no server emits them, so writing one would make a
  * re-encoded response differ from the original byte for byte. */
-void putLenEnc(std::vector<uint8_t> &v, uint64_t x)
-{
+void putLenEnc(std::vector<uint8_t> &v, uint64_t x) {
     if (x < 0xFB) {
         v.push_back((uint8_t)x);
     }
@@ -48,23 +45,20 @@ void putLenEnc(std::vector<uint8_t> &v, uint64_t x)
     }
 }
 
-void putLenEncStr(std::vector<uint8_t> &v, const std::string &s)
-{
+void putLenEncStr(std::vector<uint8_t> &v, const std::string &s) {
     putLenEnc(v, s.size());
     v.insert(v.end(), s.begin(), s.end());
 }
 
 /* Append one payload as a wire packet and advance the sequence id. */
-void emit(std::vector<uint8_t> &out, const std::vector<uint8_t> &payload, uint8_t &seq)
-{
+void emit(std::vector<uint8_t> &out, const std::vector<uint8_t> &payload, uint8_t &seq) {
     std::vector<uint8_t> pkt = encodeMessage(payload.data(), payload.size(), seq);
 
     out.insert(out.end(), pkt.begin(), pkt.end());
     seq++;
 }
 
-std::vector<uint8_t> columnPayload(const Column &c)
-{
+std::vector<uint8_t> columnPayload(const Column &c) {
     std::vector<uint8_t> p;
 
     putLenEncStr(p, c.catalog);
@@ -84,8 +78,7 @@ std::vector<uint8_t> columnPayload(const Column &c)
     return p;
 }
 
-std::vector<uint8_t> rowPayload(const Row &r)
-{
+std::vector<uint8_t> rowPayload(const Row &r) {
     std::vector<uint8_t> p;
 
     for (const Value &v : r) {
@@ -101,8 +94,7 @@ std::vector<uint8_t> rowPayload(const Row &r)
 
 /* The terminating packet, whose shape depends on what was negotiated: a real
  * five-byte EOF, or an OK packet wearing an 0xFE header. */
-std::vector<uint8_t> terminator(const ResultSet &rs, uint32_t caps)
-{
+std::vector<uint8_t> terminator(const ResultSet &rs, uint32_t caps) {
     std::vector<uint8_t> p;
 
     p.push_back(0xFE);
@@ -121,8 +113,7 @@ std::vector<uint8_t> terminator(const ResultSet &rs, uint32_t caps)
 
 /* --- reading ------------------------------------------------------------- */
 
-bool getLenEncStr(const uint8_t *d, size_t len, size_t &pos, std::string &out)
-{
+bool getLenEncStr(const uint8_t *d, size_t len, size_t &pos, std::string &out) {
     std::string_view sv;
 
     if (!readLenEncString(d, len, pos, sv)) {
@@ -132,8 +123,7 @@ bool getLenEncStr(const uint8_t *d, size_t len, size_t &pos, std::string &out)
     return true;
 }
 
-bool parseColumn(const Message &m, Column &c)
-{
+bool parseColumn(const Message &m, Column &c) {
     const uint8_t *d = m.payload.data();
     size_t len = m.payload.size();
     size_t pos = 0;
@@ -159,8 +149,7 @@ bool parseColumn(const Message &m, Column &c)
     return true;
 }
 
-bool parseRow(const Message &m, size_t ncols, Row &r)
-{
+bool parseRow(const Message &m, size_t ncols, Row &r) {
     const uint8_t *d = m.payload.data();
     size_t len = m.payload.size();
     size_t pos = 0;
@@ -188,8 +177,7 @@ bool parseRow(const Message &m, size_t ncols, Row &r)
 
 } // namespace
 
-std::vector<uint8_t> encodeResultSet(const ResultSet &rs, uint32_t caps, uint8_t seq)
-{
+std::vector<uint8_t> encodeResultSet(const ResultSet &rs, uint32_t caps, uint8_t seq) {
     std::vector<uint8_t> out;
     std::vector<uint8_t> p;
 
@@ -222,8 +210,7 @@ std::vector<uint8_t> encodeResultSet(const ResultSet &rs, uint32_t caps, uint8_t
     return out;
 }
 
-bool parseResultSet(const uint8_t *data, size_t len, uint32_t caps, ResultSet &out)
-{
+bool parseResultSet(const uint8_t *data, size_t len, uint32_t caps, ResultSet &out) {
     MessageReader rd;
     Message m;
     uint64_t ncols = 0;

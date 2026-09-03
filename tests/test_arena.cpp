@@ -24,8 +24,7 @@ constexpr size_t HEAP = 64 * 1024;
 
 class ArenaTest : public ::testing::Test {
 protected:
-    void SetUp() override
-    {
+    void SetUp() override {
         mem.assign(HEAP, 0);
         ASSERT_TRUE(a.init(mem.data(), mem.size()));
     }
@@ -36,8 +35,7 @@ protected:
 
 } // namespace
 
-TEST_F(ArenaTest, AllocReturnsUsableDistinctMemory)
-{
+TEST_F(ArenaTest, AllocReturnsUsableDistinctMemory) {
     void *p = a.alloc(100);
     void *q = a.alloc(100);
 
@@ -52,8 +50,7 @@ TEST_F(ArenaTest, AllocReturnsUsableDistinctMemory)
     EXPECT_EQ(((uint8_t *)q)[0], 0xBB);
 }
 
-TEST_F(ArenaTest, AllocIsEightByteAligned)
-{
+TEST_F(ArenaTest, AllocIsEightByteAligned) {
     for (size_t n = 1; n <= 64; n++) {
         void *p = a.alloc(n);
 
@@ -62,8 +59,7 @@ TEST_F(ArenaTest, AllocIsEightByteAligned)
     }
 }
 
-TEST_F(ArenaTest, PutCopies)
-{
+TEST_F(ArenaTest, PutCopies) {
     const char msg[] = "select 1";
     void *p = a.put(msg, sizeof(msg));
 
@@ -71,8 +67,7 @@ TEST_F(ArenaTest, PutCopies)
     EXPECT_STREQ((const char *)p, msg);
 }
 
-TEST_F(ArenaTest, UsedTracksLiveBytesAndReturnsToZero)
-{
+TEST_F(ArenaTest, UsedTracksLiveBytesAndReturnsToZero) {
     EXPECT_EQ(a.used(), 0u);
 
     void *p = a.alloc(1000);
@@ -86,8 +81,7 @@ TEST_F(ArenaTest, UsedTracksLiveBytesAndReturnsToZero)
     EXPECT_EQ(a.used(), 0u);
 }
 
-TEST_F(ArenaTest, FreedMemoryIsHandedOutAgain)
-{
+TEST_F(ArenaTest, FreedMemoryIsHandedOutAgain) {
     void *p = a.alloc(512);
 
     ASSERT_NE(p, nullptr);
@@ -100,8 +94,7 @@ TEST_F(ArenaTest, FreedMemoryIsHandedOutAgain)
     EXPECT_EQ(p, q);
 }
 
-TEST_F(ArenaTest, AdjacentFreesCoalesce)
-{
+TEST_F(ArenaTest, AdjacentFreesCoalesce) {
     /* Three in a row, then free all three. If the middle one did not
      * merge with both neighbours, the heap is left with fragments and the
      * big allocation below cannot be satisfied. */
@@ -121,8 +114,7 @@ TEST_F(ArenaTest, AdjacentFreesCoalesce)
     EXPECT_NE(a.alloc(24000), nullptr);
 }
 
-TEST_F(ArenaTest, CoalesceBackwardUsesThePreviousFooter)
-{
+TEST_F(ArenaTest, CoalesceBackwardUsesThePreviousFooter) {
     void *p = a.alloc(4000);
     void *q = a.alloc(4000);
 
@@ -136,8 +128,7 @@ TEST_F(ArenaTest, CoalesceBackwardUsesThePreviousFooter)
     EXPECT_EQ(a.alloc(8000), p);
 }
 
-TEST_F(ArenaTest, ExhaustionReturnsNullRatherThanOverrunning)
-{
+TEST_F(ArenaTest, ExhaustionReturnsNullRatherThanOverrunning) {
     std::vector<void *> got;
 
     for (;;) {
@@ -161,18 +152,15 @@ TEST_F(ArenaTest, ExhaustionReturnsNullRatherThanOverrunning)
     EXPECT_NE(a.alloc(4096), nullptr);
 }
 
-TEST_F(ArenaTest, AllocLargerThanTheHeapFails)
-{
+TEST_F(ArenaTest, AllocLargerThanTheHeapFails) {
     EXPECT_EQ(a.alloc(HEAP * 2), nullptr);
 }
 
-TEST_F(ArenaTest, ZeroSizedAllocFails)
-{
+TEST_F(ArenaTest, ZeroSizedAllocFails) {
     EXPECT_EQ(a.alloc(0), nullptr);
 }
 
-TEST_F(ArenaTest, DoubleFreeIsRefused)
-{
+TEST_F(ArenaTest, DoubleFreeIsRefused) {
     void *p = a.alloc(256);
 
     ASSERT_NE(p, nullptr);
@@ -186,8 +174,7 @@ TEST_F(ArenaTest, DoubleFreeIsRefused)
 
 /* --- retirement ---------------------------------------------------------- */
 
-TEST_F(ArenaTest, RetiredMemoryIsNotReusedBeforeItsGrace)
-{
+TEST_F(ArenaTest, RetiredMemoryIsNotReusedBeforeItsGrace) {
     void *p = a.alloc(4096);
 
     ASSERT_NE(p, nullptr);
@@ -207,8 +194,7 @@ TEST_F(ArenaTest, RetiredMemoryIsNotReusedBeforeItsGrace)
     EXPECT_NE(p, q);
 }
 
-TEST_F(ArenaTest, RetiredMemoryComesBackAfterItsGrace)
-{
+TEST_F(ArenaTest, RetiredMemoryComesBackAfterItsGrace) {
     void *p = a.alloc(4096);
 
     ASSERT_NE(p, nullptr);
@@ -220,8 +206,7 @@ TEST_F(ArenaTest, RetiredMemoryComesBackAfterItsGrace)
     EXPECT_EQ(a.alloc(4096), p);
 }
 
-TEST_F(ArenaTest, ReclaimLeavesTheNotYetDue)
-{
+TEST_F(ArenaTest, ReclaimLeavesTheNotYetDue) {
     void *p = a.alloc(1024);
     void *q = a.alloc(1024);
 
@@ -239,8 +224,7 @@ TEST_F(ArenaTest, ReclaimLeavesTheNotYetDue)
     EXPECT_EQ(a.used(), 0u);
 }
 
-TEST_F(ArenaTest, ReclaimOnAnEmptyRetireListIsHarmless)
-{
+TEST_F(ArenaTest, ReclaimOnAnEmptyRetireListIsHarmless) {
     a.reclaim(1);
     a.reclaim(bncl::daemon::RETIRE_GRACE_NS * 10);
     EXPECT_EQ(a.retired(), 0u);

@@ -14,17 +14,15 @@
 
 namespace bncl::daemon {
 
-bool Pool::makePipe(Pipe &p)
-{
+bool Pool::makePipe(Pipe &p) {
     sockaddr_in addr{};
     socklen_t alen = sizeof(addr);
-    int cfd, sfd;
 
     if (getsockname(listen_fd, (sockaddr *)&addr, &alen)) {
         return false;
     }
 
-    cfd = socket(AF_INET, SOCK_STREAM, 0);
+    int cfd = socket(AF_INET, SOCK_STREAM, 0);
     if (cfd < 0) {
         return false;
     }
@@ -32,7 +30,7 @@ bool Pool::makePipe(Pipe &p)
         ::close(cfd);
         return false;
     }
-    sfd = accept(listen_fd, nullptr, nullptr);
+    int sfd = accept(listen_fd, nullptr, nullptr);
     if (sfd < 0) {
         ::close(cfd);
         return false;
@@ -50,8 +48,7 @@ bool Pool::makePipe(Pipe &p)
     return true;
 }
 
-bool Pool::publish(const Pipe &p)
-{
+bool Pool::publish(const Pipe &p) {
     dpipe rec{};
 
     /* Register the socket first, then describe it, then advertise it. A
@@ -73,8 +70,7 @@ bool Pool::publish(const Pipe &p)
     return release(p.key);
 }
 
-bool Pool::init(const PoolMaps &m, size_t count)
-{
+bool Pool::init(const PoolMaps &m, size_t count) {
     sockaddr_in addr{};
     dpipes_meta meta{};
     uint32_t zero = 0;
@@ -126,8 +122,7 @@ bool Pool::init(const PoolMaps &m, size_t count)
     return true;
 }
 
-bool Pool::release(uint32_t key)
-{
+bool Pool::release(uint32_t key) {
     dpipes_meta meta{};
     uint32_t zero = 0;
 
@@ -171,8 +166,7 @@ bool Pool::release(uint32_t key)
     return bpf_map_update_elem(maps.meta, &zero, &meta, BPF_ANY) == 0;
 }
 
-uint32_t Pool::freeCount() const
-{
+uint32_t Pool::freeCount() const {
     dpipes_meta meta{};
     uint32_t zero = 0;
 
@@ -182,40 +176,29 @@ uint32_t Pool::freeCount() const
     return meta.num_free;
 }
 
-Pipe *Pool::byKey(uint32_t key)
-{
+Pipe *Pool::byKey(uint32_t key) {
     if (key >= pipes.size()) {
         return nullptr;
     }
     return &pipes[key];
 }
 
-std::vector<int> Pool::fds() const
-{
-    std::vector<int> out;
-
-    out.reserve(pipes.size());
-    for (const Pipe &p : pipes) {
-        out.push_back(p.cfd);
-    }
-    return out;
-}
-
-void Pool::shutdown()
-{
-    for (Pipe &p : pipes) {
-        if (p.cfd >= 0) {
-            ::close(p.cfd);
-        }
-        if (p.sfd >= 0) {
-            ::close(p.sfd);
-        }
-    }
-    pipes.clear();
+void Pool::shutdown() {
+    pipes.clear(); // calls ~Pipe() which calls close()
     if (listen_fd >= 0) {
         ::close(listen_fd);
         listen_fd = -1;
     }
 }
 
+void Pipe::close() {
+    if (cfd >= 0) {
+        ::close(cfd);
+        cfd = -1;
+    }
+    if (sfd >= 0) {
+        ::close(sfd);
+        sfd = -1;
+    }
+}
 } // namespace bncl::daemon

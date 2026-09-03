@@ -27,8 +27,7 @@
 
 namespace {
 
-bncl::mysql_proto::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1)
-{
+bncl::mysql_proto::Message msg(const std::vector<uint8_t> &payload, uint8_t seq = 1) {
     bncl::mysql_proto::Message m;
 
     m.payload = payload;
@@ -45,50 +44,42 @@ const uint32_t kCaps =
     bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS;
 
 /* OK: 0x00, affected_rows (lenenc), last_insert_id (lenenc), status, warnings. */
-std::vector<uint8_t> okPacket(uint16_t status)
-{
+std::vector<uint8_t> okPacket(uint16_t status) {
     return {0x00, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8), 0x00, 0x00};
 }
 
 /* EOF, pre-DEPRECATE_EOF form: 0xFE, warnings, status. Exactly five bytes --
  * a different shape from OK, not merely a shorter one. */
-std::vector<uint8_t> eofPacket(uint16_t status)
-{
+std::vector<uint8_t> eofPacket(uint16_t status) {
     return {0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8)};
 }
 
 /* The DEPRECATE_EOF-era terminator: an OK packet wearing an 0xFE header. */
-std::vector<uint8_t> okEofPacket(uint16_t status)
-{
+std::vector<uint8_t> okEofPacket(uint16_t status) {
     return {0xFE, 0x00, 0x00, (uint8_t)(status & 0xFF), (uint8_t)(status >> 8), 0x00, 0x00};
 }
 
-std::vector<uint8_t> errPacket()
-{
+std::vector<uint8_t> errPacket() {
     return {0xFF, 0x48, 0x04, '#', 'H', 'Y', '0', '0', '0', 'b', 'o', 'o', 'm'};
 }
 
 /* A column-count header, then one column definition per column. Contents do
  * not matter to the tracker -- only that a packet arrived. */
-std::vector<uint8_t> columnCount(uint8_t n)
-{
+std::vector<uint8_t> columnCount(uint8_t n) {
     return {n};
 }
 
-std::vector<uint8_t> columnDef()
-{
+std::vector<uint8_t> columnDef() {
     return {0x03, 'd', 'e', 'f', 0x00};
 }
 
-std::vector<uint8_t> row()
-{
+std::vector<uint8_t> row() {
     return {0x01, 'x'};
 }
 
 /* Drive a whole result set through the tracker and return it for inspection.
  * `caps` decides whether an EOF separates the definitions from the rows. */
-bncl::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int ncols, int nrows)
-{
+bncl::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int ncols, int nrows) {
     bncl::ResponseTracker t;
 
     t.begin(caps);
@@ -110,8 +101,7 @@ bncl::ResponseTracker runResultSet(uint32_t caps, uint16_t final_status, int nco
 
 } // namespace
 
-TEST(Session, SingleOkCompletesAndIsCacheable)
-{
+TEST(Session, SingleOkCompletesAndIsCacheable) {
     bncl::ResponseTracker t;
 
     t.begin(0);
@@ -121,8 +111,7 @@ TEST(Session, SingleOkCompletesAndIsCacheable)
     EXPECT_FALSE(t.inTransaction());
 }
 
-TEST(Session, ErrorIsPoisoned)
-{
+TEST(Session, ErrorIsPoisoned) {
     bncl::ResponseTracker t;
 
     t.begin(0);
@@ -132,8 +121,7 @@ TEST(Session, ErrorIsPoisoned)
     EXPECT_TRUE(t.poisoned());
 }
 
-TEST(Session, LocalInfileIsPoisoned)
-{
+TEST(Session, LocalInfileIsPoisoned) {
     bncl::ResponseTracker t;
 
     t.begin(0);
@@ -144,8 +132,7 @@ TEST(Session, LocalInfileIsPoisoned)
     EXPECT_TRUE(t.poisoned());
 }
 
-TEST(Session, OpenTransactionIsDetected)
-{
+TEST(Session, OpenTransactionIsDetected) {
     bncl::ResponseTracker t;
 
     t.begin(kCaps);
@@ -157,8 +144,7 @@ TEST(Session, OpenTransactionIsDetected)
     EXPECT_FALSE(t.poisoned());
 }
 
-TEST(Session, MoreResultsExistsIsPoisoned)
-{
+TEST(Session, MoreResultsExistsIsPoisoned) {
     bncl::ResponseTracker t;
 
     t.begin(kCaps);
@@ -167,8 +153,7 @@ TEST(Session, MoreResultsExistsIsPoisoned)
     EXPECT_TRUE(t.poisoned());
 }
 
-TEST(Session, ResultSetWithEofSeparator)
-{
+TEST(Session, ResultSetWithEofSeparator) {
     /* No DEPRECATE_EOF: an EOF packet sits between the column definitions
      * and the rows, so the tracker must expect one more packet. */
     bncl::ResponseTracker t = runResultSet(kCaps, 0, 2, 3);
@@ -178,8 +163,7 @@ TEST(Session, ResultSetWithEofSeparator)
     EXPECT_FALSE(t.inTransaction());
 }
 
-TEST(Session, ResultSetWithDeprecateEof)
-{
+TEST(Session, ResultSetWithDeprecateEof) {
     /* Same logical response, one fewer packet. Getting this branch wrong
      * silently mis-counts every result set on a modern connection. */
     bncl::ResponseTracker t =
@@ -189,8 +173,7 @@ TEST(Session, ResultSetWithDeprecateEof)
     EXPECT_FALSE(t.poisoned());
 }
 
-TEST(Session, ResultSetInTransaction)
-{
+TEST(Session, ResultSetInTransaction) {
     bncl::ResponseTracker t = runResultSet(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF,
                                            bncl::mysql_proto::SERVER_STATUS_IN_TRANS, 1, 1);
 
@@ -198,8 +181,7 @@ TEST(Session, ResultSetInTransaction)
     EXPECT_TRUE(t.inTransaction());
 }
 
-TEST(Session, LongFeLedPacketIsARowNotATerminator)
-{
+TEST(Session, LongFeLedPacketIsARowNotATerminator) {
     /* The overloaded-0xFE trap: a row whose first column value begins with
      * 0xFE. Short means terminator, long means data. Treating this as the
      * end would truncate the cached response. */
@@ -219,8 +201,7 @@ TEST(Session, LongFeLedPacketIsARowNotATerminator)
     EXPECT_FALSE(t.poisoned());
 }
 
-TEST(Session, ErrorMidResultSetIsPoisoned)
-{
+TEST(Session, ErrorMidResultSetIsPoisoned) {
     bncl::ResponseTracker t;
 
     t.begin(kCaps | bncl::mysql_proto::CLIENT_DEPRECATE_EOF);
@@ -238,16 +219,14 @@ TEST(Session, ErrorMidResultSetIsPoisoned)
  * This is the case that decides whether caching is safe on such a connection:
  * miss the flag and a response produced inside a transaction looks cacheable.
  */
-TEST(Session, TransactionDetectedFromPlainEofTerminator)
-{
+TEST(Session, TransactionDetectedFromPlainEofTerminator) {
     bncl::ResponseTracker t = runResultSet(kCaps, bncl::mysql_proto::SERVER_STATUS_IN_TRANS, 1, 1);
 
     EXPECT_TRUE(t.complete());
     EXPECT_TRUE(t.inTransaction());
 }
 
-TEST(Session, FeedAfterDoneIsIdempotent)
-{
+TEST(Session, FeedAfterDoneIsIdempotent) {
     bncl::ResponseTracker t;
 
     t.begin(kCaps);
@@ -258,8 +237,7 @@ TEST(Session, FeedAfterDoneIsIdempotent)
     EXPECT_FALSE(t.poisoned());
 }
 
-TEST(Session, BeginResetsPreviousState)
-{
+TEST(Session, BeginResetsPreviousState) {
     bncl::ResponseTracker t;
 
     t.begin(0);
@@ -275,8 +253,7 @@ TEST(Session, BeginResetsPreviousState)
     EXPECT_FALSE(t.poisoned());
 }
 
-TEST(Connection, ResetClearsPerStatementState)
-{
+TEST(Connection, ResetClearsPerStatementState) {
     bncl::Connection c;
 
     c.caps = bncl::mysql_proto::CLIENT_DEPRECATE_EOF;

@@ -34,8 +34,7 @@
 
 #include <frida-core.h>
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     FridaInjector *injector;
     GError *error = NULL;
     guint id;

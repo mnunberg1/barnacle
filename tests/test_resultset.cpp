@@ -58,8 +58,7 @@ const uint32_t CAPS_NO_DEPRECATE =
     bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS;
 const uint32_t CAPS_DEPRECATE = CAPS_NO_DEPRECATE | bncl::mysql_proto::CLIENT_DEPRECATE_EOF;
 
-bncl::mysql_proto::ResultSet parseCaptured()
-{
+bncl::mysql_proto::ResultSet parseCaptured() {
     bncl::mysql_proto::ResultSet rs;
 
     EXPECT_TRUE(
@@ -69,8 +68,7 @@ bncl::mysql_proto::ResultSet parseCaptured()
 
 /* Count wire packets in a stream, so framing can be checked without caring
  * what is in them. */
-size_t countPackets(const std::vector<uint8_t> &v)
-{
+size_t countPackets(const std::vector<uint8_t> &v) {
     bncl::mysql_proto::MessageReader rd;
     bncl::mysql_proto::Message m;
     size_t n = 0;
@@ -84,8 +82,7 @@ size_t countPackets(const std::vector<uint8_t> &v)
 
 } // namespace
 
-TEST(ResultSet, ParsesACapturedResponse)
-{
+TEST(ResultSet, ParsesACapturedResponse) {
     bncl::mysql_proto::ResultSet rs = parseCaptured();
 
     ASSERT_EQ(rs.cols.size(), 3u);
@@ -103,8 +100,7 @@ TEST(ResultSet, ParsesACapturedResponse)
     EXPECT_EQ(*rs.rows[5][0], "SKU-008");
 }
 
-TEST(ResultSet, ReEncodeIsByteIdenticalToTheCapture)
-{
+TEST(ResultSet, ReEncodeIsByteIdenticalToTheCapture) {
     /* The strongest check available: same capabilities, same starting
      * sequence, so regeneration must reproduce the server's own bytes. Any
      * disagreement about length-encoding widths, filler bytes or the shape
@@ -117,8 +113,7 @@ TEST(ResultSet, ReEncodeIsByteIdenticalToTheCapture)
     EXPECT_EQ(memcmp(again.data(), CAPTURED, sizeof(CAPTURED)), 0);
 }
 
-TEST(ResultSet, DeprecateEofChangesThePacketCount)
-{
+TEST(ResultSet, DeprecateEofChangesThePacketCount) {
     /* The reason bytes cannot simply be replayed. Same rows, one fewer
      * packet, because no EOF separates the definitions from the rows. */
     bncl::mysql_proto::ResultSet rs = parseCaptured();
@@ -131,8 +126,7 @@ TEST(ResultSet, DeprecateEofChangesThePacketCount)
     EXPECT_EQ(with, without - 1);
 }
 
-TEST(ResultSet, ReEncodedForADifferentConnectionStillParses)
-{
+TEST(ResultSet, ReEncodedForADifferentConnectionStillParses) {
     /* A response captured without DEPRECATE_EOF, served to a client that
      * negotiated it. Replaying the captured bytes would leave that client
      * a packet out of step; regenerating does not. */
@@ -149,8 +143,7 @@ TEST(ResultSet, ReEncodedForADifferentConnectionStillParses)
     }
 }
 
-TEST(ResultSet, SequenceNumberingFollowsTheTargetConnection)
-{
+TEST(ResultSet, SequenceNumberingFollowsTheTargetConnection) {
     /* Sequence ids restart per command, so a cached response has to be
      * numbered for whoever is replaying it, not for whoever produced it. */
     bncl::mysql_proto::ResultSet rs = parseCaptured();
@@ -171,8 +164,7 @@ TEST(ResultSet, SequenceNumberingFollowsTheTargetConnection)
     }
 }
 
-TEST(ResultSet, SequenceIdWrapsAtByteBoundary)
-{
+TEST(ResultSet, SequenceIdWrapsAtByteBoundary) {
     bncl::mysql_proto::ResultSet rs = parseCaptured();
     std::vector<uint8_t> v = bncl::mysql_proto::encodeResultSet(rs, CAPS_NO_DEPRECATE, 250);
     bncl::mysql_proto::MessageReader rd;
@@ -187,8 +179,7 @@ TEST(ResultSet, SequenceIdWrapsAtByteBoundary)
     }
 }
 
-TEST(ResultSet, NullIsDistinctFromEmptyString)
-{
+TEST(ResultSet, NullIsDistinctFromEmptyString) {
     /* On the wire NULL is 0xFB and an empty string is a zero-length
      * length-encoded string. Conflating them would turn one into the other
      * on every cache hit. */
@@ -211,8 +202,7 @@ TEST(ResultSet, NullIsDistinctFromEmptyString)
     EXPECT_EQ(*back.rows[1][0], "");
 }
 
-TEST(ResultSet, TransactionStatusSurvivesTheRoundTrip)
-{
+TEST(ResultSet, TransactionStatusSurvivesTheRoundTrip) {
     /* The flag that decides whether caching was permitted in the first
      * place has to come back out intact. */
     bncl::mysql_proto::ResultSet rs = parseCaptured();
@@ -227,8 +217,7 @@ TEST(ResultSet, TransactionStatusSurvivesTheRoundTrip)
               bncl::mysql_proto::SERVER_STATUS_IN_TRANS);
 }
 
-TEST(ResultSet, EmptyResultSetHasNoRows)
-{
+TEST(ResultSet, EmptyResultSetHasNoRows) {
     bncl::mysql_proto::ResultSet rs = parseCaptured();
 
     rs.rows.clear();
@@ -241,8 +230,7 @@ TEST(ResultSet, EmptyResultSetHasNoRows)
     EXPECT_TRUE(back.rows.empty());
 }
 
-TEST(ResultSet, LongValueUsesAWiderLengthPrefix)
-{
+TEST(ResultSet, LongValueUsesAWiderLengthPrefix) {
     /* Past 250 bytes a value's length no longer fits the one-byte form, so
      * the encoder has to widen and the parser has to follow it. */
     bncl::mysql_proto::ResultSet rs;
@@ -262,8 +250,7 @@ TEST(ResultSet, LongValueUsesAWiderLengthPrefix)
     EXPECT_EQ(*back.rows[0][0], big);
 }
 
-TEST(ResultSet, RejectsWhatIsNotAResultSet)
-{
+TEST(ResultSet, RejectsWhatIsNotAResultSet) {
     bncl::mysql_proto::ResultSet rs;
 
     /* An OK packet. */

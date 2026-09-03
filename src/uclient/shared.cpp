@@ -41,8 +41,7 @@ public:
     int info_fd = -1;
     int cfg_fd = -1;
 
-    void closeAll()
-    {
+    void closeAll() {
         for (int *p :
              {&stmts_fd, &dpipes_fd, &freelist_fd, &meta_fd, &cpipes_fd, &info_fd, &cfg_fd}) {
             if (*p >= 0) {
@@ -73,8 +72,7 @@ FDS fds;
  * the disposition belongs to the application and not to us; suppressing it
  * per call does not touch it.
  */
-bool post(int fd, const void *buf, size_t n)
-{
+bool post(int fd, const void *buf, size_t n) {
     ssize_t w = send(fd, buf, n, MSG_NOSIGNAL);
 
     return w == static_cast<ssize_t>(n);
@@ -94,18 +92,15 @@ bool post(int fd, const void *buf, size_t n)
  * cost of waiting forever is an application thread hung inside SSL_write for a
  * cache. Nothing here is ever allowed to be worse than not caching.
  */
-bncl_ctl *ctl()
-{
+bncl_ctl *ctl() {
     return reinterpret_cast<bncl_ctl *>(static_cast<uintptr_t>(BNCL_ARENA_VA));
 }
 
-stmt *stmtFromRef(stmt_ref ref)
-{
+stmt *stmtFromRef(stmt_ref ref) {
     return reinterpret_cast<stmt *>(static_cast<uintptr_t>(ref));
 }
 
-bool lockPipes()
-{
+bool lockPipes() {
     bncl_ctl *c = ctl();
 
     if (!fds.arena) {
@@ -136,15 +131,13 @@ bool lockPipes()
     return false;
 }
 
-void unlockPipes()
-{
+void unlockPipes() {
     __atomic_store_n(&ctl()->lock, 0u, __ATOMIC_RELEASE);
 }
 
 /* Take a dpipe off the freelist. Losing the race is normal and means the
  * query goes to the server as it otherwise would. Call with the lock held. */
-bool popDpipe(uint32_t &key)
-{
+bool popDpipe(uint32_t &key) {
     dpipes_meta meta{};
     uint32_t zero = 0, slot;
 
@@ -159,8 +152,7 @@ bool popDpipe(uint32_t &key)
     return bncl_bpf_update(fds.meta_fd, &zero, &meta, 0) == 0;
 }
 
-void pushDpipe(uint32_t key)
-{
+void pushDpipe(uint32_t key) {
     dpipes_meta meta{};
     uint32_t zero = 0;
 
@@ -181,13 +173,11 @@ void pushDpipe(uint32_t key)
 
 } // namespace
 
-bool daemonAlive()
-{
+bool daemonAlive() {
     return access(PIN("cfg"), F_OK) == 0;
 }
 
-bool openShared()
-{
+bool openShared() {
     /* Whatever a previous attach left open. Re-attaching after the daemon
      * was restarted has to end up on the NEW maps, and these descriptors
      * name the old ones. */
@@ -236,8 +226,7 @@ bool openShared()
     return true;
 }
 
-bool cfgRead(Switches &out)
-{
+bool cfgRead(Switches &out) {
     static const uint32_t slots[] = {BNCL_CFG_CLIENT_ON, BNCL_CFG_GENERATION, BNCL_CFG_LOCAL_ON};
     uint32_t vals[3] = {0, 0, 0};
 
@@ -257,8 +246,7 @@ bool cfgRead(Switches &out)
     return true;
 }
 
-bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &id)
-{
+bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &id) {
     stmt_key k{};
     stmt_ref ref = 0;
 
@@ -316,8 +304,7 @@ bool lookupPayload(const std::string &sql, std::vector<uint8_t> &out, uint32_t &
     return true;
 }
 
-bool acquire(const std::string &sql, int sock, uint32_t &key)
-{
+bool acquire(const std::string &sql, int sock, uint32_t &key) {
     stmt_key k{};
     stmt_ref ref = 0;
 
@@ -388,8 +375,7 @@ bool acquire(const std::string &sql, int sock, uint32_t &key)
     return true;
 }
 
-bool askLookup(int sock)
-{
+bool askLookup(int sock) {
     bncl_req req{};
 
     req.kind = BNCL_REQ_LOOKUP;
@@ -397,8 +383,7 @@ bool askLookup(int sock)
     return post(sock, &req, sizeof(req));
 }
 
-bool askStore(int sock, const std::vector<uint8_t> &canonical)
-{
+bool askStore(int sock, const std::vector<uint8_t> &canonical) {
     bncl_req req{};
 
     if (canonical.empty() || canonical.size() > BNCL_STORE_MAX) {
@@ -417,8 +402,7 @@ bool askStore(int sock, const std::vector<uint8_t> &canonical)
     return post(sock, msg.data(), msg.size());
 }
 
-void release(int sock, uint32_t key)
-{
+void release(int sock, uint32_t key) {
     pipe_sk_info si{};
     dpipe rec{};
 

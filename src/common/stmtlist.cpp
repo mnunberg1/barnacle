@@ -10,8 +10,7 @@ namespace {
  * file matches the statement a client actually sends; trailing whitespace and
  * CR are stripped because a file edited on Windows would otherwise produce
  * entries that can never match anything, with no visible reason. */
-std::string trim(const std::string &s)
-{
+std::string trim(const std::string &s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     size_t b = s.find_last_not_of(" \t\r\n");
 
@@ -20,8 +19,7 @@ std::string trim(const std::string &s)
 
 } // namespace
 
-void StmtList::add(const std::string &sql)
-{
+void StmtList::add(const std::string &sql) {
     if (sql.empty()) {
         return;
     }
@@ -32,8 +30,7 @@ void StmtList::add(const std::string &sql)
     }
 }
 
-bool StmtList::load(const std::string &path, std::string &err)
-{
+bool StmtList::load(const std::string &path, std::string &err) {
     std::ifstream in(path);
 
     if (!in) {
@@ -54,8 +51,7 @@ bool StmtList::load(const std::string &path, std::string &err)
     return true;
 }
 
-bool StmtList::contains(std::string_view sql) const
-{
+bool StmtList::contains(std::string_view sql) const {
     /* Heterogeneous lookup would avoid this allocation, but it needs a
      * transparent hash and this is not on the hot path -- the hot path is
      * the BPF-side map, not this. */

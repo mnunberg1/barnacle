@@ -38,8 +38,7 @@ public:
      * the daemon's own count answers only for this host. */
     bool dbsize(long &out);
 
-    bool healthy() const
-    {
+    bool healthy() const {
         return fd_ >= 0;
     }
 

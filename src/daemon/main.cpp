@@ -71,8 +71,7 @@ namespace {
 
 volatile sig_atomic_t exiting_s;
 
-uint64_t now_ns()
-{
+uint64_t now_ns() {
     timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -91,8 +90,7 @@ uint64_t now_ns()
  * the first request fetches rather than serving whatever the pointer happens
  * to reference.
  */
-bool expired(const stmt *st, uint64_t now)
-{
+bool expired(const stmt *st, uint64_t now) {
     if (!st->stmt_ttl) {
         return false; /* ttl 0 means "do not expire" */
     }
@@ -102,13 +100,11 @@ bool expired(const stmt *st, uint64_t now)
     return now - st->stmt_ts > static_cast<uint64_t>(st->stmt_ttl) * 1000000000ull;
 }
 
-stmt_ref stmtToRef(stmt *rec)
-{
+stmt_ref stmtToRef(stmt *rec) {
     return static_cast<stmt_ref>(reinterpret_cast<uintptr_t>(rec));
 }
 
-void on_signal(int)
-{
+void on_signal(int) {
     exiting_s = 1;
 }
 
@@ -147,8 +143,8 @@ struct Counters {
 
 class Daemon {
 public:
-    explicit Daemon(const Options &o) : opt(o)
-    {}
+    explicit Daemon(const Options &o) : opt(o) {
+    }
 
     bool start();
     void run();
@@ -204,8 +200,7 @@ private:
     bool c2d_on = false, d2c_on = false;
 };
 
-bool Daemon::attachSplices()
-{
+bool Daemon::attachSplices() {
     /* One attach per side. Which map a program is attached to is how it
      * knows its direction -- sk_msg has no way to tell from the context. */
     if (bpf_prog_attach(bpf_program__fd(skel->progs.splice_c2d), bpf_map__fd(skel->maps.cpipe_map),
@@ -248,8 +243,7 @@ bool Daemon::attachSplices()
  * makes it uncacheable. The record itself stays in the arena -- the arena is
  * a bump allocator with no free -- but nothing can reach it again.
  */
-bool Daemon::loadStatements()
-{
+bool Daemon::loadStatements() {
     bncl::StmtList fresh;
     std::string err;
 
@@ -369,8 +363,7 @@ bool Daemon::loadStatements()
  * Nothing here is a network service. It is an AF_UNIX socket in a directory
  * only root can write, carrying four verbs.
  */
-bool Daemon::openControl()
-{
+bool Daemon::openControl() {
     sockaddr_un sa{};
     size_t slash;
 
@@ -426,13 +419,11 @@ bool Daemon::openControl()
     return true;
 }
 
-void Daemon::cfgSet(uint32_t slot, uint32_t val)
-{
+void Daemon::cfgSet(uint32_t slot, uint32_t val) {
     bpf_map_update_elem(bpf_map__fd(skel->maps.cfg), &slot, &val, BPF_ANY);
 }
 
-uint32_t Daemon::cfgGet(uint32_t slot)
-{
+uint32_t Daemon::cfgGet(uint32_t slot) {
     uint32_t v = 0;
 
     bpf_map_lookup_elem(bpf_map__fd(skel->maps.cfg), &slot, &v);
@@ -446,8 +437,7 @@ uint32_t Daemon::cfgGet(uint32_t slot)
  * it, and a line-per-fact format survives a field being added without either
  * side needing to agree on a schema first.
  */
-void Daemon::stats(std::string &out)
-{
+void Daemon::stats(std::string &out) {
     uint64_t now = now_ns();
     size_t cached = 0;
     char buf[512];
@@ -513,8 +503,7 @@ void Daemon::stats(std::string &out)
  * CLI asking one question; keeping them out of the loop's state means a
  * control client that goes away mid-sentence cannot leave anything behind.
  */
-void Daemon::control(int fd)
-{
+void Daemon::control(int fd) {
     char buf[256];
     std::string reply;
     ssize_t n;
@@ -570,8 +559,7 @@ void Daemon::control(int fd)
     ::close(fd);
 }
 
-bool Daemon::start()
-{
+bool Daemon::start() {
     LIBBPF_OPTS(bpf_object_open_opts, oo, .pin_root_path = BNCL_PIN_DIR);
 
     /*
@@ -679,7 +667,7 @@ bool Daemon::start()
         return false;
     }
     for (uint32_t i = 0; i < opt.pipes; i++) {
-        bncl::daemon::Pipe *p = pool.byKey(i);
+        const auto *p = pool.byKey(i);
         epoll_event ev{};
 
         ev.events = EPOLLIN;
@@ -722,8 +710,7 @@ bool Daemon::start()
     return true;
 }
 
-void Daemon::reply(int sfd, uint8_t status, uint32_t stmt_id)
-{
+void Daemon::reply(int sfd, uint8_t status, uint32_t stmt_id) {
     agent_reply r{};
 
     r.status = status;
@@ -738,8 +725,7 @@ void Daemon::reply(int sfd, uint8_t status, uint32_t stmt_id)
     }
 }
 
-bool Daemon::readExactly(int fd, void *buf, size_t n)
-{
+bool Daemon::readExactly(int fd, void *buf, size_t n) {
     auto *p = static_cast<uint8_t *>(buf);
     size_t got = 0;
 
@@ -762,8 +748,7 @@ bool Daemon::readExactly(int fd, void *buf, size_t n)
  * longer carries the framing decisions of the connection it came from. It
  * goes to Valkey for other machines and into the arena for this one.
  */
-bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body)
-{
+bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body) {
     dpipe rec{};
 
     if (bpf_map_lookup_elem(bpf_map__fd(skel->maps.dpipes), &key, &rec) || !rec.stmt) {
@@ -856,8 +841,7 @@ bool Daemon::store(uint32_t key, const std::vector<uint8_t> &body)
  * cannot retire the record itself; it just leaves the count at zero and moves
  * on. This is the other half of that, run on the idle tick.
  */
-void Daemon::collectOrphans(uint64_t now)
-{
+void Daemon::collectOrphans(uint64_t now) {
     size_t keep = 0;
 
     for (size_t i = 0; i < orphans.size(); i++) {
@@ -873,8 +857,7 @@ void Daemon::collectOrphans(uint64_t now)
     orphans.resize(keep);
 }
 
-void Daemon::retireStmt(stmt *st, uint64_t now)
-{
+void Daemon::retireStmt(stmt *st, uint64_t now) {
     if (st->stmt_data) {
         arena.retire(st->stmt_data, now);
         st->stmt_data = 0;
@@ -887,8 +870,7 @@ void Daemon::retireStmt(stmt *st, uint64_t now)
     arena.retire(st, now);
 }
 
-void *Daemon::keep(stmt *st, const std::vector<uint8_t> &body)
-{
+void *Daemon::keep(stmt *st, const std::vector<uint8_t> &body) {
     if (st->stmt_data && st->stmt_data_len == body.size() &&
         memcmp(st->stmt_data, body.data(), body.size()) == 0) {
         return st->stmt_data;
@@ -921,8 +903,7 @@ void *Daemon::keep(stmt *st, const std::vector<uint8_t> &body)
  * a dead holder from a live one: a pid means nothing across the PID
  * namespaces they may be in, while elapsed time means the same to everyone.
  */
-void Daemon::breakStaleLock(uint64_t now)
-{
+void Daemon::breakStaleLock(uint64_t now) {
     bncl_ctl *c = arena.ctl();
 
     if (!c || !__atomic_load_n(&c->lock, __ATOMIC_ACQUIRE)) {
@@ -942,8 +923,7 @@ void Daemon::breakStaleLock(uint64_t now)
             (unsigned long long)((now - taken) / 1000000ull));
 }
 
-void Daemon::serve(int fd)
-{
+void Daemon::serve(int fd) {
     bncl_req req{};
 
     if (!readExactly(fd, &req, sizeof(req))) {
@@ -1094,8 +1074,7 @@ void Daemon::serve(int fd)
      * the freelist twice -- handing one pipe to two connections. */
 }
 
-void Daemon::run()
-{
+void Daemon::run() {
     std::vector<epoll_event> events(64);
 
     while (!exiting_s) {
@@ -1133,8 +1112,7 @@ void Daemon::run()
     }
 }
 
-void Daemon::stop()
-{
+void Daemon::stop() {
     pool.shutdown();
     if (ctl_fd >= 0) {
         ::close(ctl_fd);
@@ -1175,8 +1153,7 @@ void Daemon::stop()
     }
 }
 
-void usage(const char *prog)
-{
+void usage(const char *prog) {
     fprintf(stderr,
             "usage: %s [options]\n"
             "  -l PATH   statement list to cache (e.g. demo/config/cache.list)\n"
@@ -1196,8 +1173,7 @@ void usage(const char *prog)
 
 } // namespace
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     Options opt;
 
     for (int i = 1; i < argc; i++) {

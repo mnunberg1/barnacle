@@ -32,16 +32,13 @@ public:
 
     bool contains(std::string_view sql) const;
 
-    size_t size() const
-    {
+    size_t size() const {
         return stmts.size();
     }
-    bool empty() const
-    {
+    bool empty() const {
         return stmts.empty();
     }
-    const std::vector<std::string> &all() const
-    {
+    const std::vector<std::string> &all() const {
         return stmts;
     }
 

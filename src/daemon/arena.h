@@ -81,8 +81,7 @@ public:
      */
     bool init(void *mem, size_t len);
 
-    bool ok() const
-    {
+    bool ok() const {
         return base != nullptr;
     }
 
@@ -118,16 +117,14 @@ public:
     void reclaim(uint64_t now);
 
     size_t used() const;
-    size_t capacity() const
-    {
+    size_t capacity() const {
         return cap;
     }
     /* Blocks retired but not yet freed. A number that climbs and never
      * falls means reclaim() is not being called. */
     size_t retired() const;
 
-    bncl_ctl *ctl() const
-    {
+    bncl_ctl *ctl() const {
         return (bncl_ctl *)base;
     }
 

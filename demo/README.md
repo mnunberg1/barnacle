@@ -19,6 +19,7 @@ client made up, by watching the database go quiet at the same moment.
   and the MySQL and Valkey clients)
 - `seed_mysql.sql` — schema, data, and the views that make five queries slow
 - `mysql-tail.sh` — every statement that actually reaches mysqld
+- `valkey-tail.sh` — every command that actually reaches Valkey, minus the noise
 - `netem.sh` — optional network-level latency in front of MySQL
 - `config/cache.list` — the queries to cache. Ships **empty**; filling it in is
   the demo
@@ -162,7 +163,8 @@ Native Terminal windows on macOS, a tmux session elsewhere, and
 
 1. **MySQL** — `demo/mysql-tail.sh`, the general query log: every statement
    the server was asked to run.
-2. **Valkey** — `valkey-cli monitor`: every command the daemon sends the cache.
+2. **Valkey** — `demo/valkey-tail.sh`: every command the daemon sends the cache,
+   with the healthcheck's pings and the stored payloads filtered out.
 3. **Client** — `docker attach --sig-proxy=false bncl-client`: a live latency
    display, repainted once a second. `attach` rather than `logs -f` so that
    keystrokes reach it; `--sig-proxy=false` so ctrl-c detaches the pane
@@ -386,8 +388,25 @@ clients       1 attached
 
 ### What window 2 shows, and what it does not
 
+```
+12:49:12.711  SETEX   SELECT * FROM category_margin   ttl 60s   <payload>
+12:49:23.147  SETEX   SELECT * FROM brand_rollup   ttl 60s   <payload>
+12:49:24.343  GET     SELECT * FROM order_history WHERE status = 'shipped'
+```
+
 `SETEX` as each statement is captured, and `GET` when a response has to come
-back from Valkey. What it does **not** show is a steady stream during the fast
+back from Valkey.
+
+That pane is `demo/valkey-tail.sh` rather than raw `valkey-cli monitor`, which
+is the right source and the wrong signal-to-noise ratio: the compose
+healthcheck pings every five seconds, `barnacle status` runs `DBSIZE`, and a
+`SETEX` carries the whole cached result set inline — several hundred bytes of
+escaped MySQL wire protocol on one line, over 1600 characters in practice,
+which wraps and scrolls the pane past anything worth reading. So the script
+drops the bookkeeping, prints a clock instead of a unix epoch, trims the
+`bncl:` prefix every key carries, and says `<payload>` where the blob was.
+`demo/valkey-tail.sh -a` gives the unfiltered stream if you want to see what
+was taken out. What it does **not** show is a steady stream during the fast
 period — and that is the design, not a fault. There are two tiers: the shared
 one in Valkey and a local one in the BPF arena that every attached process has
 mapped. A hit served from the arena is a memory read, so no command is sent to

@@ -26,15 +26,15 @@ TabWidth: 4
 ContinuationIndentWidth: 4
 ColumnLimit: 100
 
-# Functions keep a brace on their own line; namespaces keep it on the same
-# line (`namespace x {`).
+# Functions keep the opening brace on the same line; namespaces keep it on the
+# same line (`namespace x {`).
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterCaseLabel: false
   AfterClass: false
   AfterControlStatement: Never
   AfterEnum: false
-  AfterFunction: true
+  AfterFunction: false
   AfterNamespace: false
   AfterStruct: false
   AfterUnion: false

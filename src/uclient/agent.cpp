@@ -69,8 +69,7 @@ int (*real_SSL_read_ex)(void *ssl, void *buf, size_t num, size_t *readbytes);
  * only the SSL object knows which one that is. */
 int (*real_SSL_get_fd)(const void *ssl);
 
-int sockOf(void *ssl)
-{
+int sockOf(void *ssl) {
     return real_SSL_get_fd ? real_SSL_get_fd(ssl) : -1;
 }
 
@@ -157,8 +156,7 @@ struct Conn {
  * only ever fires when something is wrong. */
 constexpr uint64_t AGENT_TIMEOUT_NS = 100ull * 1000 * 1000;
 
-uint64_t nowNs()
-{
+uint64_t nowNs() {
     timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -225,8 +223,7 @@ struct {
     unsigned long asked, pool_empty, resent, timeouts;
 } stat_s;
 
-Conn &connFor(void *ssl)
-{
+Conn &connFor(void *ssl) {
     Conn &c = conns_s[ssl];
 
     if (!c.started) {
@@ -246,8 +243,7 @@ Conn &connFor(void *ssl)
  * Called with lock_s held, from the write hook -- which is the only place
  * that consults either value, and the only place that reads list_s.
  */
-void refreshLocked()
-{
+void refreshLocked() {
     uint64_t now = nowNs();
     bncl::agent::Switches sw{};
 
@@ -310,8 +306,7 @@ void refreshLocked()
 
 /* Returns true if the write was handled -- i.e. suppressed because we can
  * answer it. False means "let the real function run", which is always safe. */
-bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
-{
+bool handleWrite(void *ssl, int sock, const void *buf, size_t num) {
     std::lock_guard<std::mutex> lk(lock_s);
     Conn &c = connFor(ssl);
     std::string sql;
@@ -423,8 +418,7 @@ bool handleWrite(void *ssl, int sock, const void *buf, size_t num)
 
 /* Hand over as much of the owed response as this call has room for. Returns 0
  * when there is nothing owed, meaning the real SSL_read should run. */
-size_t drainLocked(Conn &c, void *buf, size_t cap)
-{
+size_t drainLocked(Conn &c, void *buf, size_t cap) {
     if (c.owed_off >= c.owed.size()) {
         return 0;
     }
@@ -443,8 +437,7 @@ size_t drainLocked(Conn &c, void *buf, size_t cap)
     return n;
 }
 
-size_t drain(void *ssl, void *buf, size_t cap)
-{
+size_t drain(void *ssl, void *buf, size_t cap) {
     std::lock_guard<std::mutex> lk(lock_s);
     auto it = conns_s.find(ssl);
 
@@ -466,8 +459,7 @@ size_t drain(void *ssl, void *buf, size_t cap)
  * wrong capability leaves the client's parser misaligned for the rest of the
  * connection, so nothing is served until it is known.
  */
-bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
-{
+bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out) {
     const uint32_t base =
         bncl::mysql_proto::CLIENT_PROTOCOL_41 | bncl::mysql_proto::CLIENT_TRANSACTIONS;
     bncl::mysql_proto::ResultSet plain, deprecated;
@@ -508,8 +500,7 @@ bool inferCaps(const std::vector<uint8_t> &resp, uint32_t &out)
  * This is the read-through path. Nothing is fetched speculatively; the cache
  * only ever learns statements someone actually ran.
  */
-void observe(void *ssl, int sock, const void *buf, size_t n)
-{
+void observe(void *ssl, int sock, const void *buf, size_t n) {
     std::lock_guard<std::mutex> lk(lock_s);
     Conn &c = connFor(ssl);
     bncl::mysql_proto::Message m;
@@ -598,8 +589,7 @@ void observe(void *ssl, int sock, const void *buf, size_t n)
  *
  * Returns true if the reply was consumed.
  */
-bool takeReply(Conn *c, int fd)
-{
+bool takeReply(Conn *c, int fd) {
     bncl::agent::Reply r{};
     pollfd pfd = {fd, POLLIN, 0};
     uint64_t now = nowNs();
@@ -635,8 +625,7 @@ bool takeReply(Conn *c, int fd)
  * Returns the number of bytes placed in the caller's buffer, or 0 to let the
  * real SSL_read run.
  */
-size_t settle(void *ssl, Conn &c, void *buf, size_t cap)
-{
+size_t settle(void *ssl, Conn &c, void *buf, size_t cap) {
     if (!c.awaiting) {
         return 0;
     }
@@ -702,16 +691,14 @@ size_t settle(void *ssl, Conn &c, void *buf, size_t cap)
 
 /* --- replacements -------------------------------------------------------- */
 
-int rep_SSL_write(void *ssl, const void *buf, int num)
-{
+int rep_SSL_write(void *ssl, const void *buf, int num) {
     if (num > 0 && handleWrite(ssl, sockOf(ssl), buf, (size_t)num)) {
         return num; /* the caller believes every byte was sent */
     }
     return real_SSL_write(ssl, buf, num);
 }
 
-int rep_SSL_write_ex(void *ssl, const void *buf, size_t num, size_t *written)
-{
+int rep_SSL_write_ex(void *ssl, const void *buf, size_t num, size_t *written) {
     if (num > 0 && handleWrite(ssl, sockOf(ssl), buf, num)) {
         if (written) {
             *written = num;
@@ -721,8 +708,7 @@ int rep_SSL_write_ex(void *ssl, const void *buf, size_t num, size_t *written)
     return real_SSL_write_ex(ssl, buf, num, written);
 }
 
-int rep_SSL_read(void *ssl, void *buf, int num)
-{
+int rep_SSL_read(void *ssl, void *buf, int num) {
     if (num > 0) {
         {
             std::lock_guard<std::mutex> lk(lock_s);
@@ -749,8 +735,7 @@ int rep_SSL_read(void *ssl, void *buf, int num)
     return r;
 }
 
-int rep_SSL_read_ex(void *ssl, void *buf, size_t num, size_t *readbytes)
-{
+int rep_SSL_read_ex(void *ssl, void *buf, size_t num, size_t *readbytes) {
     if (num > 0) {
         {
             std::lock_guard<std::mutex> lk(lock_s);
@@ -793,8 +778,7 @@ int rep_SSL_read_ex(void *ssl, void *buf, size_t num, size_t *readbytes)
  * so which of these succeeds depends on when we attached, and being wrong
  * about it means silently hooking nothing.
  */
-gpointer resolve(const char *sym)
-{
+gpointer resolve(const char *sym) {
     static const char *mods[] = {"libssl.so.3", "libssl.so", NULL};
 
     /* Named module first. gum_module_find_export_by_name() takes a
@@ -843,8 +827,7 @@ Hooked hooks_s[8];
 int nhooks_s;
 bool hooked_s;
 
-void hook(GumInterceptor *ic, const char *sym, gpointer repl, gpointer *orig)
-{
+void hook(GumInterceptor *ic, const char *sym, gpointer repl, gpointer *orig) {
     gpointer target = resolve(sym);
 
     if (!target) {
@@ -871,8 +854,7 @@ void hook(GumInterceptor *ic, const char *sym, gpointer repl, gpointer *orig)
  * it is not -- which is the one failure mode a detach must not have. Reverting
  * costs a few pages of resident memory and leaves nothing of ours running.
  */
-void unhookAll()
-{
+void unhookAll() {
     if (!hooked_s || !ic_s) {
         fprintf(stderr, "agent: not attached in pid %d\n", getpid());
         return;
@@ -939,8 +921,7 @@ void unhookAll()
  * cannot unhook anything: only code running inside the target can do that,
  * and injection is the only way to get code running there.
  */
-extern "C" void bncl_agent_init(const gchar *data, gboolean *stay_resident, gpointer user_data)
-{
+extern "C" void bncl_agent_init(const gchar *data, gboolean *stay_resident, gpointer user_data) {
     static bool gum_started;
     std::string arg = data && *data ? data : "";
     std::string err;
@@ -1033,8 +1014,7 @@ extern "C" void bncl_agent_init(const gchar *data, gboolean *stay_resident, gpoi
     fprintf(stderr, "agent: ready, %zu statement(s)\n", list_s.size());
 }
 
-extern "C" __attribute__((destructor)) void bncl_agent_fini(void)
-{
+extern "C" __attribute__((destructor)) void bncl_agent_fini(void) {
     fprintf(stderr,
             "agent: writes=%lu matched=%lu asked=%lu served=%lu resent=%lu\n"
             "agent: published=%lu timeouts=%lu pool_empty=%lu txn_skip=%lu\n",

@@ -106,8 +106,7 @@ public:
     bool next(Message &out);
 
     /* Bytes held but not yet formed into a complete message. */
-    size_t buffered() const
-    {
+    size_t buffered() const {
         return buf_.size() - consumed_;
     }
 
@@ -156,8 +155,7 @@ bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out)
 
 /* The capabilities actually in force on a connection are the intersection of
  * what both sides advertised. */
-inline uint32_t negotiate(uint32_t server_caps, uint32_t client_caps)
-{
+inline uint32_t negotiate(uint32_t server_caps, uint32_t client_caps) {
     return server_caps & client_caps;
 }
 

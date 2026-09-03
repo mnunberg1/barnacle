@@ -6,24 +6,20 @@
 namespace bncl::mysql_proto {
 namespace {
 
-inline uint32_t readU24(const uint8_t *p)
-{
+inline uint32_t readU24(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
 }
 
-inline uint16_t readU16(const uint8_t *p)
-{
+inline uint16_t readU16(const uint8_t *p) {
     return (uint16_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8));
 }
 
-inline uint32_t readU32(const uint8_t *p)
-{
+inline uint32_t readU32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 /* Read a NUL-terminated string. Advances pos past the terminator. */
-bool readNulString(const uint8_t *data, size_t len, size_t &pos, std::string &out)
-{
+bool readNulString(const uint8_t *data, size_t len, size_t &pos, std::string &out) {
     size_t start = pos;
 
     while (pos < len && data[pos] != 0) {
@@ -39,8 +35,7 @@ bool readNulString(const uint8_t *data, size_t len, size_t &pos, std::string &ou
 
 } // namespace
 
-bool readLenEnc(const uint8_t *data, size_t len, size_t &pos, uint64_t &out)
-{
+bool readLenEnc(const uint8_t *data, size_t len, size_t &pos, uint64_t &out) {
     if (pos >= len) {
         return false;
     }
@@ -85,8 +80,7 @@ bool readLenEnc(const uint8_t *data, size_t len, size_t &pos, uint64_t &out)
     return false;
 }
 
-bool readLenEncString(const uint8_t *data, size_t len, size_t &pos, std::string_view &out)
-{
+bool readLenEncString(const uint8_t *data, size_t len, size_t &pos, std::string_view &out) {
     uint64_t n;
 
     if (!readLenEnc(data, len, pos, n)) {
@@ -102,8 +96,7 @@ bool readLenEncString(const uint8_t *data, size_t len, size_t &pos, std::string_
 
 /* --- MessageReader -------------------------------------------------- */
 
-void MessageReader::append(const uint8_t *data, size_t len)
-{
+void MessageReader::append(const uint8_t *data, size_t len) {
     if (len == 0) {
         return;
     }
@@ -111,21 +104,18 @@ void MessageReader::append(const uint8_t *data, size_t len)
     buf_.insert(buf_.end(), data, data + len);
 }
 
-void MessageReader::append(std::string_view s)
-{
+void MessageReader::append(std::string_view s) {
     append((const uint8_t *)s.data(), s.size());
 }
 
-void MessageReader::reset()
-{
+void MessageReader::reset() {
     buf_.clear();
     consumed_ = 0;
 }
 
 /* Drop already-consumed bytes once they dominate the buffer. Without this a
  * long-lived connection's buffer grows without bound. */
-void MessageReader::compact()
-{
+void MessageReader::compact() {
     if (consumed_ == 0) {
         return;
     }
@@ -140,8 +130,7 @@ void MessageReader::compact()
     }
 }
 
-bool MessageReader::next(Message &out)
-{
+bool MessageReader::next(Message &out) {
     size_t pos = consumed_;
     const size_t end = buf_.size();
     std::vector<uint8_t> payload;
@@ -191,8 +180,7 @@ bool MessageReader::next(Message &out)
 
 /* --- Handshake ------------------------------------------------------ */
 
-bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out)
-{
+bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out) {
     size_t pos = 0;
 
     if (len < 1) {
@@ -288,8 +276,7 @@ bool parseServerHandshake(const uint8_t *data, size_t len, ServerHandshake &out)
     return true;
 }
 
-bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out)
-{
+bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out) {
     size_t pos = 0;
 
     /* HandshakeResponse41 fixed prefix: 4-byte caps, 4-byte max packet
@@ -356,8 +343,7 @@ bool parseClientHandshake(const uint8_t *data, size_t len, ClientHandshake &out)
 
 /* --- Commands ------------------------------------------------------- */
 
-bool extractQuery(const uint8_t *data, size_t len, uint32_t caps, std::string_view &out)
-{
+bool extractQuery(const uint8_t *data, size_t len, uint32_t caps, std::string_view &out) {
     size_t pos = 0;
 
     if (len < 1 || data[0] != COM_QUERY) {
@@ -398,8 +384,7 @@ bool extractQuery(const uint8_t *data, size_t len, uint32_t caps, std::string_vi
 
 /* --- Responses ------------------------------------------------------ */
 
-ResponseKind classifyResponse(const uint8_t *data, size_t len, uint32_t caps)
-{
+ResponseKind classifyResponse(const uint8_t *data, size_t len, uint32_t caps) {
     if (len < 1) {
         return ResponseKind::Unknown;
     }
@@ -430,8 +415,7 @@ ResponseKind classifyResponse(const uint8_t *data, size_t len, uint32_t caps)
     return ResponseKind::ResultSet;
 }
 
-bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out)
-{
+bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out) {
     size_t pos = 0;
 
     if (len < 1) {
@@ -464,8 +448,7 @@ bool parseOk(const uint8_t *data, size_t len, uint32_t caps, OkPacket &out)
     return true;
 }
 
-bool parseEof(const uint8_t *data, size_t len, EofPacket &out)
-{
+bool parseEof(const uint8_t *data, size_t len, EofPacket &out) {
     /* Exactly five bytes, always: header, warnings, status. There is no
      * capability-dependent tail the way an OK packet has. */
     if (len < 5 || data[0] != 0xFE) {
@@ -476,8 +459,7 @@ bool parseEof(const uint8_t *data, size_t len, EofPacket &out)
     return true;
 }
 
-bool parseErr(const uint8_t *data, size_t len, uint32_t caps, ErrPacket &out)
-{
+bool parseErr(const uint8_t *data, size_t len, uint32_t caps, ErrPacket &out) {
     size_t pos = 0;
 
     if (len < 3 || data[0] != 0xFF) {
@@ -506,8 +488,7 @@ bool parseErr(const uint8_t *data, size_t len, uint32_t caps, ErrPacket &out)
 
 /* --- Sequence renumbering and encoding ------------------------------ */
 
-bool renumber(std::vector<uint8_t> &stream, uint8_t start_seq)
-{
+bool renumber(std::vector<uint8_t> &stream, uint8_t start_seq) {
     size_t pos = 0;
     uint8_t seq = start_seq;
 
@@ -526,8 +507,7 @@ bool renumber(std::vector<uint8_t> &stream, uint8_t start_seq)
     return pos == stream.size();
 }
 
-std::vector<uint8_t> encodeMessage(const uint8_t *payload, size_t len, uint8_t start_seq)
-{
+std::vector<uint8_t> encodeMessage(const uint8_t *payload, size_t len, uint8_t start_seq) {
     std::vector<uint8_t> out;
     size_t off = 0;
     uint8_t seq = start_seq;

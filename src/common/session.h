@@ -63,21 +63,18 @@ public:
 
     /* The command byte of the last complete packet seen, COM_QUERY or not.
      * Useful for noticing COM_QUIT and COM_STMT_PREPARE. */
-    uint8_t lastCommand() const
-    {
+    uint8_t lastCommand() const {
         return last_cmd;
     }
 
     /* Sequence id of that packet. A response continues the numbering of
      * the command it answers, and the counter restarts per command -- so a
      * cached response has to be renumbered for whoever is replaying it. */
-    uint8_t lastSeq() const
-    {
+    uint8_t lastSeq() const {
         return last_seq;
     }
 
-    size_t buffered() const
-    {
+    size_t buffered() const {
         return reader.buffered();
     }
 
@@ -98,22 +95,19 @@ public:
      * response has been seen. */
     bool feed(const bncl::mysql_proto::Message &msg);
 
-    bool complete() const
-    {
+    bool complete() const {
         return state_ == State::Done;
     }
 
     /* True if anything about this response makes it unsafe or pointless
      * to cache: an error, a LOCAL INFILE request, multiple result sets,
      * or an open transaction. */
-    bool poisoned() const
-    {
+    bool poisoned() const {
         return poisoned_;
     }
 
     /* Transaction state reported by the final OK/EOF packet. */
-    bool inTransaction() const
-    {
+    bool inTransaction() const {
         return in_transaction_;
     }
 
@@ -172,8 +166,7 @@ struct Connection {
      * of another, after renumbering. */
     std::vector<uint8_t> captured;
 
-    void reset()
-    {
+    void reset() {
         awaiting_response = false;
         pending_query.clear();
         capturing = false;

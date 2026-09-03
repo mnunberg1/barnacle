@@ -35,8 +35,7 @@ struct Foot {
     uint32_t size;
 };
 
-constexpr size_t align8(size_t n)
-{
+constexpr size_t align8(size_t n) {
     return (n + 7) & ~(size_t)7;
 }
 
@@ -78,8 +77,7 @@ struct Retired {
 #define FOOT(off) ((Foot *)(base + (off) + BLK(off)->size - FTR))
 #define OFF(p) ((uint32_t)((uint8_t *)(p) - base))
 
-bool Arena::open(int map_fd)
-{
+bool Arena::open(int map_fd) {
     size_t len = (size_t)BNCL_ARENA_PAGES * 4096;
 
     if (map_fd < 0) {
@@ -113,8 +111,7 @@ bool Arena::open(int map_fd)
     return true;
 }
 
-bool Arena::init(void *mem, size_t len)
-{
+bool Arena::init(void *mem, size_t len) {
     if (!mem || len <= BNCL_CTL_BYTES + MIN_BLOCK) {
         return false;
     }
@@ -144,8 +141,7 @@ bool Arena::init(void *mem, size_t len)
     return true;
 }
 
-void Arena::close()
-{
+void Arena::close() {
     if (base && mapped) {
         munmap(base, cap);
     }
@@ -162,8 +158,7 @@ namespace {
 constexpr uint32_t NIL = 0;
 } // namespace
 
-void *Arena::alloc(size_t n)
-{
+void *Arena::alloc(size_t n) {
     if (!base || n == 0) {
         return nullptr;
     }
@@ -229,8 +224,7 @@ void *Arena::alloc(size_t n)
     return nullptr; /* heap full */
 }
 
-void *Arena::put(const void *src, size_t n)
-{
+void *Arena::put(const void *src, size_t n) {
     void *p = alloc(n);
 
     if (!p) {
@@ -240,8 +234,7 @@ void *Arena::put(const void *src, size_t n)
     return p;
 }
 
-void Arena::free(void *p)
-{
+void Arena::free(void *p) {
     if (!base || !p) {
         return;
     }
@@ -308,8 +301,7 @@ void Arena::free(void *p)
     FOOT(off)->size = b->size;
 }
 
-void Arena::retire(void *p, uint64_t now)
-{
+void Arena::retire(void *p, uint64_t now) {
     if (!base || !p) {
         return;
     }
@@ -336,8 +328,7 @@ void Arena::retire(void *p, uint64_t now)
     c->retire = off;
 }
 
-void Arena::reclaim(uint64_t now)
-{
+void Arena::reclaim(uint64_t now) {
     if (!base) {
         return;
     }
@@ -367,13 +358,11 @@ void Arena::reclaim(uint64_t now)
     c->retire = keep;
 }
 
-size_t Arena::used() const
-{
+size_t Arena::used() const {
     return base ? (size_t)ctl()->used : 0;
 }
 
-size_t Arena::retired() const
-{
+size_t Arena::retired() const {
     size_t n = 0;
 
     if (!base) {

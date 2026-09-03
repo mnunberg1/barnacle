@@ -37,6 +37,7 @@ import math
 import os
 import random
 import select
+import signal
 import sys
 import termios
 import threading
@@ -612,6 +613,20 @@ class Worker(threading.Thread):
 
 
 def run(args) -> int:
+    # Outlive the viewer.
+    #
+    # The container is given a tty so that +/- can reach it, which makes this
+    # process the foreground of a controlling terminal -- and when whoever was
+    # attached detaches, the pty goes away and the kernel sends SIGHUP, whose
+    # default action is death. Closing the pane you were watching the client
+    # in would take the client with it, and the cache agent injected into it,
+    # and the demo would quietly become a different demo. Observed exactly
+    # once, and it cost an hour of confusing measurements.
+    try:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    except (ValueError, OSError):
+        pass  # not the main thread, or no such signal here
+
     win = Window(colour=args.colour, window=args.window)
     frame = Frame(redraw=args.redraw)
     keys = Keys()

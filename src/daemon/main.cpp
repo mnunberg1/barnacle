@@ -464,6 +464,7 @@ void Daemon::stats(std::string &out) {
     snprintf(buf, sizeof(buf),
              "pid %d\n"
              "uptime %ld\n"
+             "started_at %ld\n"
              "statements %zu\n"
              "cached %zu\n"
              "refs %lu\n"
@@ -487,7 +488,7 @@ void Daemon::stats(std::string &out) {
              "arena_cap %zu\n"
              "arena_retired %zu\n"
              "list %s\n",
-             getpid(), (long)(time(nullptr) - started), list.size(), cached, refs, pool.size(),
+             getpid(), (long)(time(nullptr) - started), (long)started, list.size(), cached, refs, pool.size(),
              pool.freeCount(), cnt.hits, cnt.misses, cnt.errors, cnt.stores, cnt.refused,
              cnt.lockbreaks, cnt.reloads, cfgGet(BNCL_CFG_GENERATION), cfgGet(BNCL_CFG_CLIENT_ON),
              local_on ? 1 : 0, opt.ttl, opt.valkey_host.c_str(), (unsigned)opt.valkey_port,

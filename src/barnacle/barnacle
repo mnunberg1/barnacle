@@ -382,10 +382,21 @@ def stale_attachments(st, entries):
     if not st or not entries:
         return []
     try:
-        started = time.time() - float(st.get("uptime", 0))
+        # The daemon's own start time, absolute. Deriving it from `uptime`
+        # instead is off by up to a second, because uptime is whole seconds
+        # truncated -- which puts `started` AFTER the real start and made an
+        # attachment in that same second look stale. Exact beats derived.
+        if "started_at" in st:
+            started = float(st["started_at"])
+        else:
+            started = time.time() - float(st.get("uptime", 0))
     except ValueError:
         return []
-    return [e for e in entries if e[2] < started]
+    # A margin, because the recorded attach time is whole seconds too. Nothing
+    # real is lost: a daemon that restarted seconds after an attach is not a
+    # case anyone needs warned about, while a false warning here would teach
+    # people to ignore the one signal that says the cache has stopped working.
+    return [e for e in entries if e[2] < started - 2]
 
 
 def warn_stale(stale):

@@ -117,7 +117,7 @@ EXPLAIN = {
 class Target:
     def __init__(self, name):
         self.name = name
-        self.comm = ""
+        self.bin = ""
         self.cmdline = ""
         self.container = ""
         self.mysql_port = 3306
@@ -125,7 +125,7 @@ class Target:
         self.ttl = 60
 
     def matches_nothing(self):
-        return not (self.comm or self.cmdline or self.container)
+        return not (self.bin or self.cmdline or self.container)
 
 
 class Config:
@@ -220,7 +220,7 @@ def load_config(path):
                                      % (path, lineno, val, what))
                 continue
 
-            if key in ("comm", "cmdline", "container", "statements"):
+            if key in ("bin", "cmdline", "container", "statements"):
                 setattr(cur, key, val)
             elif key == "mysql_port":
                 cur.mysql_port = int(val)
@@ -614,14 +614,24 @@ def ci_contains(hay, needle):
     return needle.lower() in hay.lower() if needle else True
 
 
-def ci_equals(hay, needle):
-    """Case-insensitive exact match; an empty needle matches anything.
+def match_bin(comm, needle):
+    """Does this process's name match a target's `bin`?
 
-    Used for comm, which is a short fixed name rather than a phrase. Substring
-    matching there is actively wrong: `comm = mysql` would also match mysqld,
-    so a config meaning "the mysql CLI" would try to attach to the server.
+    Exact and case-insensitive, never a substring: `bin = mysql` must not also
+    match mysqld, or a config meaning "the mysql CLI" would try to attach to
+    the server.
+
+    A leading path is trimmed, because the name invites one. What is actually
+    compared is /proc/<pid>/comm, which is a bare name the kernel truncates to
+    15 characters -- so `bin = /usr/bin/python3` would otherwise match nothing
+    at all, silently. Accepting the basename means the obvious thing to write
+    works.
     """
-    return hay.lower() == needle.lower() if needle else True
+    if not needle:
+        return True
+    if "/" in needle:
+        needle = needle.rsplit("/", 1)[1]
+    return comm.lower() == needle.lower()
 
 
 def discover(cfg):
@@ -648,7 +658,7 @@ def discover(cfg):
         cname = names.get(cid, cid[:12] if cid else "")
 
         for t in cfg.targets:
-            if not ci_equals(comm, t.comm):
+            if not match_bin(comm, t.bin):
                 continue
             if not ci_contains(cmdline, t.cmdline):
                 continue
@@ -858,7 +868,7 @@ ROW = "%-7s %-14s %-16s %-8s %-8s %-6s %s"
 
 
 def report(procs, explain):
-    print(ROW % ("PID", "COMM", "WHERE", "TLS", "SYMBOLS", "CONNS", "VERDICT"))
+    print(ROW % ("PID", "BIN", "WHERE", "TLS", "SYMBOLS", "CONNS", "VERDICT"))
     print(ROW % ("-" * 7, "-" * 14, "-" * 16, "-" * 8, "-" * 8, "-" * 6, "-" * 16))
 
     for p in procs:

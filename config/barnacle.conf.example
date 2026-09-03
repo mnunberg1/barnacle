@@ -55,12 +55,16 @@ mysql_port  = 3306
 
 # --- what to attach to ---------------------------------------------------
 #
-# `comm` is matched exactly (case-insensitively) because it is a short fixed
-# name -- `mysql` must not also match `mysqld`. `cmdline` and `container` are
-# case-insensitive substrings. A target with no matchers at all is rejected,
-# since it would match every process on the host.
+# `bin` is the program's name, matched exactly and case-insensitively --
+# never as a substring, or `mysql` would also match `mysqld` and a config
+# meaning "the mysql CLI" would try to attach to the server. A leading path is
+# trimmed, so `/usr/bin/python3` and `python3` both work; what is compared is
+# /proc/<pid>/comm, which the kernel truncates to 15 characters.
+#
+# `cmdline` and `container` are case-insensitive substrings. A target with no
+# matchers at all is rejected, since it would match every process on the host.
 
 [target my-app]
-comm      = python3
+bin       = python3
 cmdline   = my_app.py
 container = my-app-container

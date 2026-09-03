@@ -84,6 +84,13 @@ services:
       # than asking for a host on first load.
       VALKEY_HOST: valkey
       VALKEY_PORT: "6379"
+      # Standalone, not a cluster -- and this is the setting that decides
+      # whether the UI connects at all. Valkey Admin defaults endpointType to
+      # "cluster-endpoint", so against the single node this demo runs (per
+      # demo-goals.txt: no replication, no clustering) it attempts cluster
+      # discovery, that fails, and the dashboard sits there with nothing
+      # connected while the logs say only `collector-rx ... timed out`.
+      VALKEY_ENDPOINT_TYPE: node
       # A cached result set is a few KB of MySQL wire protocol; the default
       # 2048 would truncate exactly the values worth looking at.
       KEY_VALUE_SIZE_LIMIT_BYTES: "65536"

@@ -440,7 +440,13 @@ stack for that:
 http://localhost:18080
 ```
 
-It comes up already pointed at this stack's Valkey, and gives command
+It comes up already pointed at this stack's Valkey — `VALKEY_HOST`,
+`VALKEY_PORT` and, critically, `VALKEY_ENDPOINT_TYPE: node`, because Valkey
+Admin defaults to `cluster-endpoint` and against the single node this demo
+runs that attempts cluster discovery, fails, and leaves the dashboard with
+nothing connected while the logs say only `collector-rx ... timed out`.
+
+It gives command
 throughput, hit ratio, connected clients and memory, plus a key browser that
 lists the `bncl:` keys and renders the cached result set behind each one.
 `KEY_VALUE_SIZE_LIMIT_BYTES` is raised in `docker-compose.yml`, because the

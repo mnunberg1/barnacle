@@ -11,7 +11,8 @@ client made up, by watching the database go quiet at the same moment.
 
 ## Layout
 
-- `docker-compose.yml` — the four services: `mysql`, `valkey`, `client`, `ctl`
+- `docker-compose.yml` — the services: `mysql`, `valkey`, `valkey-admin`,
+  `client`, `ctl`
 - `up.sh` / `down.sh` — start and stop the whole thing
 - `terminals.sh` — opens the four windows to watch it in
 - `client/app.py`, `client/Dockerfile` — the application and its own image
@@ -36,6 +37,7 @@ All commands are run from the repository root.
 | `bncl-valkey` | the cache | nothing else |
 | `bncl-client` | a sealed application | talk to MySQL |
 | `bncl-ctl` | the controller | supervise the client; talk to Valkey |
+| `bncl-admin` | Valkey Admin, a web UI | read Valkey; watches, participates in nothing |
 
 The controller is where the daemon runs and where you type `barnacle`. It runs
 in the host PID namespace and is privileged, so it can
@@ -177,6 +179,12 @@ window 2 starts moving — and no one of those three facts means much without
 the other two.
 
 ## The client
+
+Eight worker threads, each with its own connection, issuing twenty statements
+at random, forever — around 300 queries a second when the cache is warm. That
+is the traffic knob: `--threads N`. A thread per connection because MySQLdb
+connections cannot be shared, and the GIL is not in the way, since the work is
+a blocking socket read that releases it.
 
 Twenty statements, issued at random, forever. Fifteen return immediately; five
 take somewhere between half a second and three seconds, and no two executions
@@ -421,6 +429,31 @@ which is the TTL doing its job.
 The other time it moves is with a second attached client, or a second host:
 that is what the shared tier is for.
 
+### Watching it as a rate, not a stream
+
+Window 2 shows commands as they happen. What no terminal pane shows is a
+**rate** — and with eight workers the interesting question stops being "which
+command" and becomes "how much". Valkey Admin, the official web UI, is in the
+stack for that:
+
+```
+http://localhost:18080
+```
+
+It comes up already pointed at this stack's Valkey, and gives command
+throughput, hit ratio, connected clients and memory, plus a key browser that
+lists the `bncl:` keys and renders the cached result set behind each one.
+`KEY_VALUE_SIZE_LIMIT_BYTES` is raised in `docker-compose.yml`, because the
+default of 2048 would truncate exactly the values worth opening.
+
+It only watches. Barnacle neither knows nor cares that it is there, and the
+demo works with the service stopped.
+
+**Expect it to read zero at first**, and that is the design rather than a
+fault: a hit served from this host's arena sends Valkey nothing, so the client
+can be doing 300 queries a second while the dashboard sits flat. The next
+section is how to change that.
+
 ### Making every hit go to Valkey
 
 The local tier can be given up on purpose. Uncomment `local_cache = off` in
@@ -437,11 +470,15 @@ local tier bypassed -- every lookup now goes to Valkey
 
 Window 2 now shows a `GET` for every cached query the client issues, and
 window 3 stays at a millisecond — a Valkey round trip on this network is
-nothing next to a second and a half. `status` says which mode it is in:
+nothing next to a second and a half. Measured on this stack with eight
+workers: **0 ops/s before, ~80 ops/s after**, with the client unchanged at
+~300 q/s. Traffic and where it goes are separate knobs — `--threads` sets how
+much, `local_cache` sets whether Valkey ever sees it. `status` says which mode
+it is in:
 
 ```
 local tier    BYPASSED -- every lookup goes to Valkey
-arena         10 KiB of 16384 KiB used, 0 wrap(s)
+arena         10 KiB of 16384 KiB used, 0 block(s) retired
 ```
 
 It is not only a way to make the demo louder. With the local tier bypassed the
@@ -471,6 +508,19 @@ the chunk when the bytes have not changed, which is why `arena used` barely
 moves under a few hundred bypassed lookups — worth watching, because a bump
 allocator that wrapped once per lookup would evict other statements long
 before their TTL.
+
+### The MySQL pane at this rate
+
+Fifteen of the twenty statements are not cacheable and reach the database
+regardless, so at 300 q/s `demo/mysql-tail.sh` scrolls fast and the "database
+goes quiet" moment is harder to pick out than it was at six queries a second.
+To watch only the statements the cache is responsible for:
+
+```bash
+demo/mysql-tail.sh | grep -E "inventory_report|order_history|brand_rollup|customer_spend|category_margin"
+```
+
+Or run the client with `--threads 1` for the quiet version.
 
 ## How reload-config reaches a running client
 

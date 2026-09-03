@@ -91,5 +91,15 @@ three seconds each.
   5. put it back         docker compose -f demo/docker-compose.yml exec ctl \
                              barnacle detach-client
 
+Valkey Admin:  http://localhost:18080     command throughput, hit ratio, and a
+                                          key browser over the bncl: keys
+
+               A cache hit is served from this host's arena and sends Valkey
+               nothing, so that dashboard sits at zero however hard the client
+               works. To route every lookup through Valkey and make it move:
+                 uncomment `local_cache = off` in demo/config/barnacle.conf
+                 docker compose -f demo/docker-compose.yml exec ctl \
+                     barnacle reload-config
+
 Shut down:  demo/down.sh
 EOF

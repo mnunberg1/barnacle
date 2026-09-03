@@ -248,9 +248,12 @@ class Window:
         self.samples = collections.deque()  # (monotonic, seconds)
         self.slow = collections.deque(maxlen=SLOW_KEEP)
         self.trend = []
+        self.total = 0      # queries since start, for --count
+        self.connected = 0  # workers with a live connection
 
     def add(self, now, elapsed, note=None):
         self.samples.append((now, elapsed))
+        self.total += 1
         if note:
             self.slow.append(note)
 
@@ -305,8 +308,12 @@ class Window:
         top = max(counts)
         slow = sum(1 for t in times if t * 1000 >= SLOW_MS)
 
-        out = ["client  %s  %s queries%s"
-               % (head, self.paint(str(n), BOLD),
+        # Rate, not just a count: with several workers the point of the
+        # window is how much traffic is going through, and a raw count means
+        # nothing without dividing by a window width the reader has to notice.
+        out = ["client  %s  %s q/s  %s conn%s"
+               % (head, self.paint("%.0f" % (n / self.window), BOLD),
+                  self.connected,
                   "" if not slow
                   else self.paint("   %d over %dms" % (slow, SLOW_MS), RED))]
 
@@ -529,31 +536,36 @@ class Display(threading.Thread):
         self.join(timeout=1.0)
 
 
-def run(args) -> int:
-    conn = None
-    win = Window(colour=args.colour, window=args.window)
-    frame = Frame(redraw=args.redraw)
-    keys = Keys()
-    display = Display(win, frame, keys, args.interval)
-    issued = 0
+class Worker(threading.Thread):
+    """One connection, issuing queries as fast as its interval allows.
 
-    display.start()
-    try:
-        while True:
-            if args.count and issued >= args.count:
-                display.stop()
-                display.paint(time.monotonic())
-                return 0
+    A thread per connection, and a connection per thread: MySQLdb connections
+    are not safe to share, and sharing one would serialise the workers behind
+    each other anyway. The GIL is not a problem here because the work is a
+    blocking socket read -- Python releases it for the duration of the query,
+    which is precisely where these threads spend their lives.
 
+    Every worker feeds the same Window, so the histogram is the whole client's
+    latency rather than one connection's.
+    """
+
+    def __init__(self, wid, args, win, display, stop):
+        super().__init__(daemon=True)
+        self.wid = wid
+        self.args = args
+        self.win = win
+        self.display = display
+        self.stop = stop
+
+    def run(self):
+        conn = None
+        while not self.stop.is_set():
             try:
                 if conn is None:
-                    conn = connect(args)
-                    with display.lock:
-                        frame.dirty()
-                        say("client: connected to %s:%d/%s -- %d statements, "
-                            "%d of them slow"
-                            % (args.host, args.port, args.db, len(QUERIES),
-                               len(SLOW)))
+                    conn = connect(self.args)
+                    with self.display.lock:
+                        self.win.connected += 1
+                        self.display.frame.dirty()
 
                 sql = random.choice(QUERIES)
                 start = time.monotonic()
@@ -564,20 +576,19 @@ def run(args) -> int:
                 ncols = len(cur.description) if cur.description else 0
                 cur.close()
 
-                issued += 1
                 note = None
                 if elapsed * 1000 >= SLOW_MS:
-                    note = ("  %s %s  %2d row(s) x %d col(s)  %s"
-                            % (win.paint("SLOW", RED),
-                               win.paint("%7s" % dur(elapsed), BOLD),
-                               len(rows), ncols, sql[:52]))
-                with display.lock:
-                    win.add(time.monotonic(), elapsed, note)
+                    note = ("  %s %s  c%-2d %2d row(s) x %d col(s)  %s"
+                            % (self.win.paint("SLOW", RED),
+                               self.win.paint("%7s" % dur(elapsed), BOLD),
+                               self.wid, len(rows), ncols, sql[:44]))
+                with self.display.lock:
+                    self.win.add(time.monotonic(), elapsed, note)
 
             except MySQLError as exc:
-                with display.lock:
-                    frame.dirty()
-                    print("client: query failed: %s" % (exc,), file=sys.stderr,
+                with self.display.lock:
+                    self.display.frame.dirty()
+                    print("client: c%d: %s" % (self.wid, exc), file=sys.stderr,
                           flush=True)
                 # Only a connection-level failure is worth reconnecting for. A
                 # statement the server rejected -- a missing table, a syntax
@@ -591,14 +602,46 @@ def run(args) -> int:
                     except MySQLError:
                         pass
                     conn = None
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                return 0
+                    with self.display.lock:
+                        self.win.connected -= 1
+                    self.stop.wait(1.0)
 
-            time.sleep(random.uniform(args.min_interval, args.max_interval))
+            if self.args.max_interval > 0:
+                self.stop.wait(random.uniform(self.args.min_interval,
+                                              self.args.max_interval))
+
+
+def run(args) -> int:
+    win = Window(colour=args.colour, window=args.window)
+    frame = Frame(redraw=args.redraw)
+    keys = Keys()
+    display = Display(win, frame, keys, args.interval)
+    stop = threading.Event()
+
+    say("client: %d worker(s) against %s:%d/%s -- %d statements, %d of them slow"
+        % (args.threads, args.host, args.port, args.db, len(QUERIES), len(SLOW)))
+
+    workers = [Worker(i + 1, args, win, display, stop)
+               for i in range(args.threads)]
+    display.start()
+    for w in workers:
+        w.start()
+
+    try:
+        while not stop.is_set():
+            if args.count and win.total >= args.count:
+                break
+            stop.wait(0.25)
+    except KeyboardInterrupt:
+        pass
     finally:
+        stop.set()
+        for w in workers:
+            w.join(timeout=2.0)
         display.stop()
+        display.paint(time.monotonic())
         keys.restore()
+    return 0
 
 
 def main() -> int:
@@ -610,10 +653,14 @@ def main() -> int:
     ap.add_argument("--password",
                     default=os.environ.get("MYSQL_PASSWORD", "apppw"))
     ap.add_argument("--db", default=os.environ.get("MYSQL_DB", "shop"))
-    ap.add_argument("--min-interval", type=float, default=0.05,
-                    help="seconds, min gap between queries")
-    ap.add_argument("--max-interval", type=float, default=0.25,
-                    help="seconds, max gap between queries")
+    ap.add_argument("--threads", type=int, default=8, metavar="N",
+                    help="worker threads, each with its own connection "
+                         "(default: %(default)s). This is the traffic knob: "
+                         "queries per second scale with it")
+    ap.add_argument("--min-interval", type=float, default=0.0,
+                    help="seconds, min gap between one worker's queries")
+    ap.add_argument("--max-interval", type=float, default=0.05,
+                    help="seconds, max gap. 0 for no gap at all")
     ap.add_argument("--interval", type=float,
                     default=float(os.environ.get("BNCL_REDRAW", REDRAW_SECS)),
                     metavar="SECS",
@@ -639,6 +686,7 @@ def main() -> int:
     if os.environ.get("NO_COLOR"):
         args.colour = False
     args.interval = min(RATE_MAX, max(RATE_MIN, args.interval))
+    args.threads = max(1, args.threads)
     return run(args)
 
 

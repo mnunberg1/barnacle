@@ -58,6 +58,40 @@ services:
       timeout: 3s
       retries: 10
 
+  # Valkey Admin -- the official web UI (valkey-io/valkey-admin).
+  #
+  # Here for one reason: the terminal panes show cache traffic as it happens,
+  # and nothing shows it as a RATE. This does -- command throughput, hit
+  # ratio, connected clients, memory -- plus a key browser that lists the
+  # `bncl:` keys and renders the cached result set behind each one.
+  #
+  # It watches; it is not part of the cache. Barnacle neither knows nor cares
+  # that it is there, and the demo works with this service stopped.
+  #
+  # NOTE: with the local tier on (the default), a cache hit is served from
+  # this host's arena and sends Valkey nothing -- so the throughput graph sits
+  # at zero however hard the client is working. That is the design, not a
+  # fault. Set `local_cache = off` in demo/config/barnacle.conf and reload to
+  # route every lookup through Valkey and make this dashboard move.
+  valkey-admin:
+    image: valkey/valkey-admin:latest
+    container_name: bncl-admin
+    ports:
+      - "18080:8080"
+    environment:
+      DEPLOYMENT_MODE: Web
+      # Pre-wired, so the UI opens straight onto this stack's Valkey rather
+      # than asking for a host on first load.
+      VALKEY_HOST: valkey
+      VALKEY_PORT: "6379"
+      # A cached result set is a few KB of MySQL wire protocol; the default
+      # 2048 would truncate exactly the values worth looking at.
+      KEY_VALUE_SIZE_LIMIT_BYTES: "65536"
+    restart: unless-stopped
+    depends_on:
+      valkey:
+        condition: service_healthy
+
   # The client application: a sealed program that knows nothing about the
   # cache, in its own container and its own image. Everything the cache does
   # to it is done from outside, to a process that is already running -- which

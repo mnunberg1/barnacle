@@ -1,0 +1,93 @@
+The daemon's control protocol
+=============================
+
+bncl-daemon listens on a SOCK_STREAM AF_UNIX socket at /run/barnacle/daemon.sock
+(BNCL_CTL_SOCK in src/common/defs.h). src/barnacle/barnacle is the only speaker;
+`ctl()` there is the client side, Daemon::control() in src/daemon/main.cpp is the
+server side. Nothing checks that the two agree -- one end is Python -- so this
+file is the contract.
+
+Shape:
+
+  - One command per connection. Connect, write, read until EOF, done.
+  - A command is one line of text. A trailing \n or \r is stripped; sending none
+    is fine. At most 255 bytes are read.
+  - The reply is a line starting with `ok` or `error`, except STATS, which is a
+    `key value` report. The daemon closes the connection after answering.
+  - An unrecognized command answers `error unknown command`.
+
+
+PING
+    Liveness. Answers `ok`. Used by `barnacle status` to tell a dead daemon from
+    a stale pid file.
+
+STATS
+    The counter report, one `key value` pair per line -- not an ok/error reply.
+    Keys, in order:
+
+      pid uptime started_at statements cached refs pipes pipes_free hits
+      misses errors stores refused lockbreaks reloads generation client_on
+      local_on ttl valkey valkey_ok valkey_keys arena_used arena_cap
+      arena_retired list
+
+    `uptime` and `started_at` are seconds, `started_at` absolute. `valkey` is
+    `host:port`. `list` is the statement list's path. The rest are counts or
+    0/1 flags. daemon_stats() in src/barnacle/barnacle parses this into a dict,
+    splitting on the first space only, so a value may contain spaces.
+
+RELOAD
+    Re-read the statement list from the path the daemon was started with, then
+    bump BNCL_CFG_GENERATION so attached agents rebuild their index.
+
+      ok <n> statement(s)
+      error cannot reload <path>
+
+    The generation moves only on success, and only after the new records are
+    published.
+
+ATTACH <pid> <agent.so>
+    Inject <agent.so> into <pid>. If the process already has the agent, it is
+    re-armed instead.
+
+      ok
+      ok rearmed
+      error attach failed
+      error usage: ATTACH <pid> <agent.so>
+
+    The reply is DEFERRED. The daemon dlopens libbnclattach.so and runs the
+    injection on a thread -- frida ptraces the target and the symbol poll waits
+    for the agent to reach socketpair() -- so the answer can take seconds.
+    run_inject() allows 120s. Every other command answers immediately.
+
+    `ok detached` distinguishes a detach, which produces no control channel for
+    the daemon to adopt, from an attach, which does.
+
+    <agent.so> is resolved by the loader inside the target, so a build-tree run
+    needs LD_LIBRARY_PATH or an rpath.
+
+CLIENT on
+CLIENT off
+    Interception, via BNCL_CFG_CLIENT_ON in the arena. `off` makes every agent
+    pass its queries through without consulting the cache; it does not detach
+    anything. Answers `ok`.
+
+LOCAL on
+LOCAL off
+    The daemon's own cache tier, via BNCL_CFG_LOCAL_ON. `off` sends every
+    lookup to Valkey. Answers `ok`.
+
+    Written to the arena as well as held in the daemon, because both ends have
+    to agree: an agent that still thought the local tier was live would stop
+    asking about statements the daemon would now fetch.
+
+
+Notes
+-----
+
+  - Control connections are handled inline, not added to the epoll set, so a
+    CLI that goes away mid-sentence leaves nothing behind. ATTACH is the
+    exception: its connection is handed to the attach thread.
+  - `CLIENT on|off` and `LOCAL on|off` match exactly, including the single
+    space. ATTACH is the only command parsed as a prefix.
+  - No command carries a file descriptor. The agent's control channel reaches
+    the daemon from inside the attach, not over this socket.

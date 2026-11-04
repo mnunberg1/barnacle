@@ -23,3 +23,5 @@ compile_commands.json
 # particular machine.
 /config/barnacle.conf
 /config/cache.list
+# hard-linked copies kept away from AI tooling
+*-edit.*
